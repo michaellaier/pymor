@@ -8,7 +8,7 @@
 Usage:
   thermalblock.py [-ehp] [--estimator-norm=NORM] [--extension-alg=ALG] [--grid=NI] [--help]
                   [--pickle=PREFIX] [--plot-solutions] [--plot-error-sequence] [--reductor=RED]
-                  [--test=COUNT]
+                  [--test=COUNT] [--num-engines=COUNT] [--profile=PROFILE] [--list-vector-array]
                   XBLOCKS YBLOCKS SNAPSHOTS RBSIZE
 
 
@@ -48,6 +48,14 @@ Options:
 
   --test=COUNT           Use COUNT snapshots for stochastic error estimation
                          [default: 10].
+
+  --num-engines=COUNT    If positive, the number of IPython cluster engines to use for
+                         parallel greedy search. If zero, no parallelization is performed.
+                         [default: 0]
+
+  --profile=PROFILE      IPython profile to use for parallelization.
+
+  --list-vector-array    Solve using ListVectorArray[NumpyVector] instead of NumpyVectorArray.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -66,9 +74,11 @@ from pymor.analyticalproblems.thermalblock import ThermalBlockProblem
 from pymor.core.pickle import dump
 from pymor.discretizers.elliptic import discretize_elliptic_cg
 from pymor.parameters.functionals import ExpressionParameterFunctional
+from pymor.parallel.ipython import new_ipcluster_pool
 from pymor.reductors.basic import reduce_to_subbasis
 from pymor.reductors.linear import reduce_stationary_affine_linear
 from pymor.reductors.stationary import reduce_stationary_coercive
+from pymor.tools.context import no_context
 
 
 def thermalblock_demo(args):
@@ -78,6 +88,7 @@ def thermalblock_demo(args):
     args['SNAPSHOTS'] = int(args['SNAPSHOTS'])
     args['RBSIZE'] = int(args['RBSIZE'])
     args['--test'] = int(args['--test'])
+    args['--num-engines'] = int(args['--num-engines'])
     args['--estimator-norm'] = args['--estimator-norm'].lower()
     assert args['--estimator-norm'] in {'trivial', 'h1'}
     args['--extension-alg'] = args['--extension-alg'].lower()
@@ -92,6 +103,11 @@ def thermalblock_demo(args):
 
     print('Discretize ...')
     discretization, _ = discretize_elliptic_cg(problem, diameter=1. / args['--grid'])
+
+    if args['--list-vector-array']:
+        from pymor.playground.discretizers.numpylistvectorarray import convert_to_numpy_list_vector_array
+        discretization = convert_to_numpy_list_vector_array(discretization)
+
     discretization.generate_sid()
 
     print('The parameter type is {}'.format(discretization.parameter_type))
@@ -120,9 +136,15 @@ def thermalblock_demo(args):
                             'gram_schmidt': gram_schmidt_basis_extension,
                             'h1_gram_schmidt': partial(gram_schmidt_basis_extension, product=discretization.h1_product)}
     extension_algorithm = extension_algorithms[args['--extension-alg']]
-    greedy_data = greedy(discretization, reductor, discretization.parameter_space.sample_uniformly(args['SNAPSHOTS']),
-                         use_estimator=args['--with-estimator'], error_norm=discretization.h1_norm,
-                         extension_algorithm=extension_algorithm, max_extensions=args['RBSIZE'])
+
+    with (new_ipcluster_pool(num_engines=args['--num-engines'], profile=args['--profile'])
+          if args['--num-engines'] else no_context) as pool:
+        greedy_data = greedy(discretization, reductor,
+                             discretization.parameter_space.sample_uniformly(args['SNAPSHOTS']),
+                             use_estimator=args['--with-estimator'], error_norm=discretization.h1_norm,
+                             extension_algorithm=extension_algorithm, max_extensions=args['RBSIZE'],
+                             pool=pool)
+
     rb_discretization, reconstructor = greedy_data['reduced_discretization'], greedy_data['reconstructor']
 
     if args['--pickle']:

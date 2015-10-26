@@ -8,8 +8,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from pymor.grids.interfaces import AffineGridInterface
-from pymor.grids.referenceelements import triangle
+from pymor.grids.unstructured import UnstructuredTriangleGrid
 
 from pymor.domaindescriptions.boundarytypes import BoundaryType
 from pymor.grids.interfaces import BoundaryInfoInterface
@@ -170,11 +169,7 @@ def parse_gmsh_file(f):
     return sections
 
 
-class GmshGrid(AffineGridInterface):
-
-    dim = 2
-    dim_outer = 2
-    reference_element = triangle
+class GmshGrid(UnstructuredTriangleGrid):
 
     def __init__(self, gmsh_file):
         self.logger.info('Parsing gmsh file ...')
@@ -186,67 +181,15 @@ class GmshGrid(AffineGridInterface):
         assert 'triangle' in self.sections['Elements']
         assert all(n[1][2] == 0 for n in self.sections['Nodes'])
 
-        self.logger.info('Creating entity maps ...')
         node_ids = dict(zip([n[0] for n in self.sections['Nodes']], np.arange(len(self.sections['Nodes']), dtype=np.int32)))
-        if 'line' in self.sections['Elements']:
-            line_ids = dict(zip([l[0] for l in self.sections['Elements']['line']], np.arange(len(self.sections['Elements']['line']), dtype=np.int32)))
-        triangle_ids = dict(zip([t[0] for t in self.sections['Elements']['triangle']], np.arange(len(self.sections['Elements']['triangle']), dtype=np.int32)))
+        vertices = np.array([n[1][0:2] for n in self.sections['Nodes']])
 
-        self.logger.info('Building grid topology ...')
-
-        # the lines dict will hold the indices of lines defined by pairs of points
-        if 'line' in self.sections['Elements']:
-            lines = dict(zip([frozenset(l[2]) for l in self.sections['Elements']['line']], np.arange(len(self.sections['Elements']['line']), dtype=np.int32)))
-
-        nodes_list = [t[2] for t in self.sections['Elements']['triangle']]
-        codim2_subentities = np.array([[node_ids[nodes[0]], node_ids[nodes[1]], node_ids[nodes[2]]] for nodes in nodes_list])
-        edges_list = [(frozenset(nodes[1:3]), frozenset((nodes[2], nodes[0])), frozenset(nodes[0:2])) for nodes in nodes_list]
-        for edges in edges_list:
-            lines.update(dict(zip([e for e in edges if e not in lines], np.arange(len(lines), len(lines)+len([e for e in edges if e not in lines]), dtype=np.int32))))
-        codim1_subentities = np.array([[lines[edges[0]], lines[edges[1]], lines[edges[2]]] for edges in edges_list])
-
-        del nodes_list
-        del edges_list
-
-        self.logger.info('Calculating embeddings ...')
-        codim2_centers = np.array([n[1][0:2] for n in self.sections['Nodes']])
-        SEC = codim2_centers[codim2_subentities]
-        SHIFTS = SEC[:, 0, :]
-        TRANS = SEC[:, 1:, :] - SHIFTS[:, np.newaxis, :]
-        TRANS = TRANS.swapaxes(1, 2)
-
-        self.__embeddings = (TRANS, SHIFTS)
-        self.__subentities = (np.arange(len(codim1_subentities), dtype=np.int32).reshape(-1, 1),
-                              codim1_subentities, codim2_subentities)
-        self.__sizes = (len(codim1_subentities), len(lines), len(codim2_centers))
+        faces = np.array([[node_ids[nodes[0]], node_ids[nodes[1]], node_ids[nodes[2]]]
+                         for _, _, nodes in self.sections['Elements']['triangle']])
+        super(GmshGrid, self).__init__(vertices, faces)
 
     def __str__(self):
         return 'GmshGrid with {} triangles, {} lines, {} vertices'.format(*self.__sizes)
-
-    def size(self, codim=0):
-        assert 0 <= codim <= 2, 'Invalid codimension'
-        return self.__sizes[codim]
-
-    def subentities(self, codim=0, subentity_codim=None):
-        assert 0 <= codim <= 2, 'Invalid codimension'
-        if subentity_codim is None:
-            subentity_codim = codim + 1
-        assert codim <= subentity_codim <= self.dim, 'Invalid subentity codimensoin'
-        if codim == 0:
-            return self.__subentities[subentity_codim]
-        else:
-            return super(GmshGrid, self).subentities(codim, subentity_codim)
-
-    def embeddings(self, codim=0):
-        if codim == 0:
-            return self.__embeddings
-        else:
-            return super(GmshGrid, self).embeddings(codim)
-
-    @staticmethod
-    def test_instances():
-        import os.path
-        return GmshGrid(open(os.path.join(os.path.dirname(__file__), '../../../../testdata/gmsh_1.msh'))),
 
 
 class GmshBoundaryInfo(BoundaryInfoInterface):
@@ -259,9 +202,17 @@ class GmshBoundaryInfo(BoundaryInfoInterface):
         name_ids = dict(zip([pn[0] for pn in sections['PhysicalNames']], np.arange(len(sections['PhysicalNames']),
                                                                                    dtype=np.int32)))
         node_ids = dict(zip([n[0] for n in sections['Nodes']], np.arange(len(sections['Nodes']), dtype=np.int32)))
+
         if 'line' in sections['Elements']:
-            line_ids = dict(zip([l[0] for l in sections['Elements']['line']],
-                                np.arange(len(sections['Elements']['line']), dtype=np.int32)))
+            superentities = grid.superentities(2, 1)
+
+            def find_edge(vertices):
+                edge_set = set(superentities[vertices[0]]).intersection(superentities[vertices[1]]) - {-1}
+                if len(edge_set) != 1:
+                    raise ValueError
+                return next(iter(edge_set))
+
+            line_ids = {l[0]: find_edge([node_ids[l[2][0]], node_ids[l[2][1]]]) for l in sections['Elements']['line']}
 
         #masks = {}
         masks2 = {}

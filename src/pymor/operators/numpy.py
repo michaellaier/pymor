@@ -130,8 +130,8 @@ class NumpyMatrixBasedOperator(OperatorBase):
     def as_vector(self, mu=None):
         return self.assemble(mu).as_vector()
 
-    def apply_inverse(self, U, ind=None, mu=None, options=None):
-        return self.assemble(mu).apply_inverse(U, ind=ind, options=options)
+    def apply_inverse(self, V, ind=None, mu=None, options=None):
+        return self.assemble(mu).apply_inverse(V, ind=ind, options=options)
 
     @property
     def invert_options(self):
@@ -180,8 +180,6 @@ class NumpyMatrixOperator(NumpyMatrixBasedOperator):
         Name of the operator.
     """
 
-    calculate_sid = False
-
     def __init__(self, matrix, name=None):
         assert matrix.ndim <= 2
         if matrix.ndim == 1:
@@ -191,7 +189,6 @@ class NumpyMatrixOperator(NumpyMatrixBasedOperator):
         self.name = name
         self._matrix = matrix
         self.sparse = issparse(matrix)
-        self.calculate_sid = hasattr(matrix, 'sid')
 
     def _assemble(self, mu=None):
         pass
@@ -200,9 +197,10 @@ class NumpyMatrixOperator(NumpyMatrixBasedOperator):
         return self
 
     def as_vector(self, mu=None):
-        if self.source.dim != 1 and self.range.dim != 1:
+        matrix = self._matrix
+        if matrix.shape[0] != 1 and matrix.shape[1] != 1:
             raise TypeError('This operator does not represent a vector or linear functional.')
-        return NumpyVectorArray(self._matrix.ravel(), copy=True)
+        return NumpyVectorArray(matrix.ravel(), copy=True)
 
     def apply(self, U, ind=None, mu=None):
         assert U in self.source
@@ -225,19 +223,19 @@ class NumpyMatrixOperator(NumpyMatrixBasedOperator):
         else:
             return ATPrU
 
-    def apply_inverse(self, U, ind=None, mu=None, options=None):
-        assert U in self.range
-        assert U.check_ind(ind)
-        if U.dim == 0:
+    def apply_inverse(self, V, ind=None, mu=None, options=None):
+        assert V in self.range
+        assert V.check_ind(ind)
+        if V.dim == 0:
             if (self.source.dim == 0
                     or isinstance(options, str) and options.startswith('least_squares')
                     or isinstance(options, dict) and options['type'].startswith('least_squares')):
-                return NumpyVectorArray(np.zeros((U.len_ind(ind), self.source.dim)))
+                return NumpyVectorArray(np.zeros((V.len_ind(ind), self.source.dim)))
             else:
                 raise InversionError
-        U = U.data if ind is None else \
-            U.data[ind] if hasattr(ind, '__len__') else U.data[ind:ind + 1]
-        return NumpyVectorArray(_apply_inverse(self._matrix, U, options=options), copy=False)
+        V = V.data if ind is None else \
+            V.data[ind] if hasattr(ind, '__len__') else V.data[ind:ind + 1]
+        return NumpyVectorArray(_apply_inverse(self._matrix, V, options=options), copy=False)
 
     def projected_to_subbasis(self, dim_range=None, dim_source=None, name=None):
         """Project the operator to a subbasis.
@@ -679,10 +677,10 @@ def _invert_options(matrix=None, sparse=None):
             return _dense_options
 
 
-def _apply_inverse(matrix, U, options=None):
+def _apply_inverse(matrix, V, options=None):
     """Solve linear equation system.
 
-    Applies the inverse of `matrix` to the row vectors in `U`.
+    Applies the inverse of `matrix` to the row vectors in `V`.
 
     See :func:`sparse_options` for documentation of all possible options for
     sparse matrices.
@@ -694,7 +692,7 @@ def _apply_inverse(matrix, U, options=None):
     ----------
     matrix
         The |NumPy| matrix to invert.
-    U
+    V
         2-dimensional |NumPy array| containing as row vectors
         the right-hand sides of the linear equation systems to
         solve.
@@ -726,23 +724,23 @@ def _apply_inverse(matrix, U, options=None):
         options = default_options[user_options['type']]
         options.update(user_options)
 
-    R = np.empty((len(U), matrix.shape[1]))
+    R = np.empty((len(V), matrix.shape[1]))
 
     if options['type'] == 'solve':
-        for i, UU in enumerate(U):
+        for i, VV in enumerate(V):
             try:
-                R[i] = np.linalg.solve(matrix, UU)
+                R[i] = np.linalg.solve(matrix, VV)
             except np.linalg.LinAlgError as e:
                 raise InversionError('{}: {}'.format(str(type(e)), str(e)))
     elif options['type'] == 'least_squares_lstsq':
-        for i, UU in enumerate(U):
+        for i, VV in enumerate(V):
             try:
-                R[i], _, _, _ = np.linalg.lstsq(matrix, UU, rcond=options['rcond'])
+                R[i], _, _, _ = np.linalg.lstsq(matrix, VV, rcond=options['rcond'])
             except np.linalg.LinAlgError as e:
                 raise InversionError('{}: {}'.format(str(type(e)), str(e)))
     elif options['type'] == 'bicgstab':
-        for i, UU in enumerate(U):
-            R[i], info = bicgstab(matrix, UU, tol=options['tol'], maxiter=options['maxiter'])
+        for i, VV in enumerate(V):
+            R[i], info = bicgstab(matrix, VV, tol=options['tol'], maxiter=options['maxiter'])
             if info != 0:
                 if info > 0:
                     raise InversionError('bicgstab failed to converge after {} iterations'.format(info))
@@ -753,8 +751,8 @@ def _apply_inverse(matrix, U, options=None):
         ilu = spilu(matrix, drop_tol=options['spilu_drop_tol'], fill_factor=options['spilu_fill_factor'],
                     drop_rule=options['spilu_drop_rule'], permc_spec=options['spilu_permc_spec'])
         precond = LinearOperator(matrix.shape, ilu.solve)
-        for i, UU in enumerate(U):
-            R[i], info = bicgstab(matrix, UU, tol=options['tol'], maxiter=options['maxiter'], M=precond)
+        for i, VV in enumerate(V):
+            R[i], info = bicgstab(matrix, VV, tol=options['tol'], maxiter=options['maxiter'], M=precond)
             if info != 0:
                 if info > 0:
                     raise InversionError('bicgstab failed to converge after {} iterations'.format(info))
@@ -764,29 +762,29 @@ def _apply_inverse(matrix, U, options=None):
     elif options['type'] == 'spsolve':
         if scipy.version.version >= '0.14':
             if hasattr(matrix, 'factorization'):
-                R = matrix.factorization.solve(U.T).T
+                R = matrix.factorization.solve(V.T).T
             elif options['keep_factorization']:
                 matrix.factorization = splu(matrix, permc_spec=options['permc_spec'])
-                R = matrix.factorization.solve(U.T).T
+                R = matrix.factorization.solve(V.T).T
             else:
-                R = spsolve(matrix, U.T, permc_spec=options['permc_spec']).T
+                R = spsolve(matrix, V.T, permc_spec=options['permc_spec']).T
         else:
             if hasattr(matrix, 'factorization'):
-                for i, UU in enumerate(U):
-                    R[i] = matrix.factorization.solve(UU)
+                for i, VV in enumerate(V):
+                    R[i] = matrix.factorization.solve(VV)
             elif options['keep_factorization']:
                 matrix.factorization = splu(matrix, permc_spec=options['permc_spec'])
-                for i, UU in enumerate(U):
-                    R[i] = matrix.factorization.solve(UU)
-            elif len(U) > 1:
+                for i, VV in enumerate(V):
+                    R[i] = matrix.factorization.solve(VV)
+            elif len(V) > 1:
                 factorization = splu(matrix, permc_spec=options['permc_spec'])
-                for i, UU in enumerate(U):
-                    R[i] = factorization.solve(UU)
+                for i, VV in enumerate(V):
+                    R[i] = factorization.solve(VV)
             else:
-                R = spsolve(matrix, U.T, permc_spec=options['permc_spec']).reshape((1, -1))
+                R = spsolve(matrix, V.T, permc_spec=options['permc_spec']).reshape((1, -1))
     elif options['type'] == 'lgmres':
-        for i, UU in enumerate(U):
-            R[i], info = lgmres(matrix, UU.copy(i),
+        for i, VV in enumerate(V):
+            R[i], info = lgmres(matrix, VV.copy(i),
                                 tol=options['tol'],
                                 maxiter=options['maxiter'],
                                 inner_m=options['inner_m'],
@@ -795,8 +793,8 @@ def _apply_inverse(matrix, U, options=None):
                 raise InversionError('lgmres failed to converge after {} iterations'.format(info))
             assert info == 0
     elif options['type'] == 'least_squares_lsmr':
-        for i, UU in enumerate(U):
-            R[i], info, itn, _, _, _, _, _ = lsmr(matrix, UU.copy(i),
+        for i, VV in enumerate(V):
+            R[i], info, itn, _, _, _, _, _ = lsmr(matrix, VV.copy(i),
                                                   damp=options['damp'],
                                                   atol=options['atol'],
                                                   btol=options['btol'],
@@ -807,8 +805,8 @@ def _apply_inverse(matrix, U, options=None):
             if info == 7:
                 raise InversionError('lsmr failed to converge after {} iterations'.format(itn))
     elif options['type'] == 'least_squares_lsqr':
-        for i, UU in enumerate(U):
-            R[i], info, itn, _, _, _, _, _, _, _ = lsqr(matrix, UU.copy(i),
+        for i, VV in enumerate(V):
+            R[i], info, itn, _, _, _, _, _, _, _ = lsqr(matrix, VV.copy(i),
                                                         damp=options['damp'],
                                                         atol=options['atol'],
                                                         btol=options['btol'],
@@ -819,14 +817,14 @@ def _apply_inverse(matrix, U, options=None):
             if info == 7:
                 raise InversionError('lsmr failed to converge after {} iterations'.format(itn))
     elif options['type'] == 'pyamg':
-        if len(U) > 0:
-            U_iter = iter(enumerate(U))
-            R[0], ml = pyamg.solve(matrix, next(U_iter)[1],
+        if len(V) > 0:
+            V_iter = iter(enumerate(V))
+            R[0], ml = pyamg.solve(matrix, next(V_iter)[1],
                                    tol=options['tol'],
                                    maxiter=options['maxiter'],
                                    return_solver=True)
-            for i, UU in U_iter:
-                R[i] = pyamg.solve(matrix, UU,
+            for i, VV in V_iter:
+                R[i] = pyamg.solve(matrix, VV,
                                    tol=options['tol'],
                                    maxiter=options['maxiter'],
                                    existing_solver=ml)
@@ -839,8 +837,8 @@ def _apply_inverse(matrix, U, options=None):
                                       max_levels=options['max_levels'],
                                       max_coarse=options['max_coarse'],
                                       coarse_solver=options['coarse_solver'])
-        for i, UU in enumerate(U):
-            R[i] = ml.solve(UU,
+        for i, VV in enumerate(V):
+            R[i] = ml.solve(VV,
                             tol=options['tol'],
                             maxiter=options['maxiter'],
                             cycle=options['cycle'],
@@ -857,8 +855,8 @@ def _apply_inverse(matrix, U, options=None):
                                                max_levels=options['max_levels'],
                                                max_coarse=options['max_coarse'],
                                                diagonal_dominance=options['diagonal_dominance'])
-        for i, UU in enumerate(U):
-            R[i] = ml.solve(UU,
+        for i, VV in enumerate(V):
+            R[i] = ml.solve(VV,
                             tol=options['tol'],
                             maxiter=options['maxiter'],
                             cycle=options['cycle'],
@@ -869,7 +867,7 @@ def _apply_inverse(matrix, U, options=None):
         from pymor.operators.numpy import NumpyMatrixOperator
         from pymor.vectorarrays.numpy import NumpyVectorArray
         return genericsolvers.apply_inverse(NumpyMatrixOperator(matrix),
-                                            NumpyVectorArray(U, copy=False),
+                                            NumpyVectorArray(V, copy=False),
                                             options=options).data
     else:
         raise ValueError('Unknown solver type')

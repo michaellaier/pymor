@@ -27,7 +27,6 @@ from pymor.discretizers.elliptic import discretize_elliptic_cg, discretize_ellip
 from pymor.domaindescriptions.basic import PieDomain
 from pymor.domaindiscretizers.gmsh import discretize_Gmsh
 from pymor.functions.basic import GenericFunction, ConstantFunction
-from pymor.gui.qt import visualize_patch
 from pymor.vectorarrays.numpy import NumpyVectorArray
 
 
@@ -57,7 +56,7 @@ def gmsh_elliptic_demo(args):
     U = discretization.solve()
 
     print('Plot ...')
-    visualize_patch(grid, U, bounding_box=[[-1., -1.], [1., 1.]], codim=2)
+    discretization.visualize(U)
 
     print('Comparing with reference solution ...')
     def ref_sol(X):
@@ -68,7 +67,7 @@ def gmsh_elliptic_demo(args):
         return np.power(r, np.pi/args['ANGLE']) * np.sin(phi*np.pi/args['ANGLE'])
     solution = GenericFunction(ref_sol, 2)
     U_ref = NumpyVectorArray(solution(grid.centers(2)))
-    visualize_patch(grid, (U, U_ref, U-U_ref), bounding_box=[[-1., -1.], [1., 1.]], separate_colorbars=True, codim=2)
+    discretization.visualize((U, U_ref, U-U_ref), separate_colorbars=True)
 
     print('')
 
