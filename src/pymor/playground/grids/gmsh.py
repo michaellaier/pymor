@@ -173,19 +173,19 @@ class GmshGrid(UnstructuredTriangleGrid):
 
     def __init__(self, gmsh_file):
         self.logger.info('Parsing gmsh file ...')
-        self.sections = parse_gmsh_file(gmsh_file)
+        sections = parse_gmsh_file(gmsh_file)
 
-        self.logger.info('Checking is grid is a 2d triangular grid ...')
-        assert {'Nodes', 'Elements', 'PhysicalNames'} <= set(self.sections.keys())
-        assert set(self.sections['Elements'].keys()) <= {'line', 'triangle'}
-        assert 'triangle' in self.sections['Elements']
-        assert all(n[1][2] == 0 for n in self.sections['Nodes'])
+        self.logger.info('Checking if grid is a 2d triangular grid ...')
+        assert {'Nodes', 'Elements', 'PhysicalNames'} <= set(sections.keys())
+        assert set(sections['Elements'].keys()) <= {'line', 'triangle'}
+        assert 'triangle' in sections['Elements']
+        assert all(n[1][2] == 0 for n in sections['Nodes'])
 
-        node_ids = dict(zip([n[0] for n in self.sections['Nodes']], np.arange(len(self.sections['Nodes']), dtype=np.int32)))
-        vertices = np.array([n[1][0:2] for n in self.sections['Nodes']])
+        node_ids = dict(zip([n[0] for n in sections['Nodes']], np.arange(len(sections['Nodes']), dtype=np.int32)))
+        vertices = np.array([n[1][0:2] for n in sections['Nodes']])
 
         faces = np.array([[node_ids[nodes[0]], node_ids[nodes[1]], node_ids[nodes[2]]]
-                         for _, _, nodes in self.sections['Elements']['triangle']])
+                         for _, _, nodes in sections['Elements']['triangle']])
         super(GmshGrid, self).__init__(vertices, faces)
 
     def __str__(self):
@@ -194,9 +194,11 @@ class GmshGrid(UnstructuredTriangleGrid):
 
 class GmshBoundaryInfo(BoundaryInfoInterface):
 
-    def __init__(self, grid):
-        self.grid = grid
-        sections = grid.sections
+    def __init__(self, grid, gmsh_file):
+        assert isinstance(grid, GmshGrid)
+        self.logger.info('Parsing gmsh file ...')
+        sections = parse_gmsh_file(gmsh_file)
+
         self.boundary_types = [BoundaryType(pn[2]) for pn in sections['PhysicalNames'] if pn[1] == 1]
 
         name_ids = dict(zip([pn[0] for pn in sections['PhysicalNames']], np.arange(len(sections['PhysicalNames']),
@@ -214,27 +216,16 @@ class GmshBoundaryInfo(BoundaryInfoInterface):
 
             line_ids = {l[0]: find_edge([node_ids[l[2][0]], node_ids[l[2][1]]]) for l in sections['Elements']['line']}
 
-        #masks = {}
-        masks2 = {}
+        masks = {}
         for bt in self.boundary_types:
-            #masks[bt] = [np.array([False]*grid.size(1)), np.array([False]*grid.size(2))]
-            #masks[bt][0][[line_ids[l[0]] for l in sections['Elements']['line']]] = \
-                #[(bt.type == sections['PhysicalNames'][name_ids[l[1][0]]][2]) for l in sections['Elements']['line']]
-            #masks[bt][1][np.ravel([[node_ids[n] for n in l[2]] for l in sections['Elements']['line']])] = \
-                #np.ravel([(bt.type == sections['PhysicalNames'][name_ids[l[1][0]]][2]) for n in l[2]] for l in
-                          #sections['Elements']['line'])
-            masks2[bt] = [np.array([False]*grid.size(1)), np.array([False]*grid.size(2))]
-            for l in sections['Elements']['line']:
-                masks2[bt][0][line_ids[l[0]]] = (bt.type == sections['PhysicalNames'][name_ids[l[1][0]]][2])
-                for n in l[2]:
-                    if not masks2[bt][1][node_ids[n]]:
-                        masks2[bt][1][node_ids[n]] = (bt.type == sections['PhysicalNames'][name_ids[l[1][0]]][2])
-        #print(np.all(masks[BoundaryType('dirichlet')][0] == masks2[BoundaryType('dirichlet')][0]))
-        #print(np.all(masks[BoundaryType('dirichlet')][1] == masks2[BoundaryType('dirichlet')][1]))
-        #print(np.all(masks[BoundaryType('neumann')][0] == masks2[BoundaryType('neumann')][0]))
-        #print(np.all(masks[BoundaryType('neumann')][1] == masks2[BoundaryType('neumann')][1]))
+            masks[bt] = [np.array([False]*grid.size(1)), np.array([False]*grid.size(2))]
+            masks[bt][0][[line_ids[l[0]] for l in sections['Elements']['line']]] = \
+                [(bt.type == sections['PhysicalNames'][name_ids[l[1][0]]][2]) for l in sections['Elements']['line']]
+            ind = np.array([node_ids[n] for l in sections['Elements']['line'] for n in l[2] ])
+            val = masks[bt][0][[line_ids[l[0]] for l in sections['Elements']['line'] for n in l[2]]]
+            masks[bt][1][ind[val]] = True
 
-        self._masks = masks2
+        self._masks = masks
 
     def mask(self, boundary_type, codim):
         assert 1 <= codim <= self.grid.dim
