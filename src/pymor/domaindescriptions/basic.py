@@ -266,14 +266,18 @@ class CircleDomain(DomainDescriptionInterface):
 
 class PolygonalDomain(DomainDescriptionInterface):
 
-    def __init__(self, points, boundary_types):
+    def __init__(self, points, boundary_types, holes=[]):
         self.points = points
+        self.holes = holes
         assert isinstance(boundary_types, dict) or isinstance(boundary_types, FunctionInterface)
         if isinstance(boundary_types, FunctionInterface):
+            points = [points]
+            points.extend(holes)
             points_deque = [collections.deque(ps) for ps in points]
             for ps_d in points_deque:
                 ps_d.rotate(-1)
-            centers = [[(p0[0]+p1[0])/2, (p0[1]+p1[1])/2] for ps, ps_d in zip(points, points_deque) for p0, p1 in zip(ps, ps_d)]
+            centers = [[(p0[0]+p1[0])/2, (p0[1]+p1[1])/2] for ps, ps_d in zip(points, points_deque)
+                       for p0, p1 in zip(ps, ps_d)]
             self.boundary_types = dict(zip([boundary_types(centers)], [range(1, len(centers)+1)]))
         else:
             self.boundary_types = boundary_types
@@ -289,8 +293,8 @@ class PieDomain(PolygonalDomain):
         from math import pi, cos, sin
         assert (0 < angle) and (angle < 2*pi)
 
-        points = [[[0, 0]]]
-        points[0].extend([[cos(a), sin(a)] for a in np.linspace(start=0, stop=angle, num=num_points, endpoint=True)])
+        points = [[0., 0.]]
+        points.extend([[cos(a), sin(a)] for a in np.linspace(start=0, stop=angle, num=num_points, endpoint=True)])
         boundary_types = {BoundaryType('dirichlet'): range(1, len(points[0])+1)}
 
         super(PieDomain, self).__init__(points, boundary_types)
