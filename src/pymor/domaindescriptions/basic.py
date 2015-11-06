@@ -265,19 +265,44 @@ class CircleDomain(DomainDescriptionInterface):
 
 
 class PolygonalDomain(DomainDescriptionInterface):
+    """Describes a domain with a polygonal boundary and possible polygonal holes inside the domain.
+
+    Parameters
+    ----------
+    points
+        List of points [x_0, x_1] that describe the polygonal chain that bounds the domain.
+    boundary_types
+        Either a dictionary {'boundary_type_0': [i_0, ...], 'boundary_type_1': [j_0, ...], ...} with i_0, ... being the
+        id of the line (starting with 0) that connects the corresponding points.
+        Or a function that returns the boundary type for a given coordinate.
+    holes
+        List of Lists of points that describe the polygonal chains that bound the holes inside the domain.
+    Attributes
+    ----------
+    points
+    boundary_types
+    holes
+    """
 
     def __init__(self, points, boundary_types, holes=[]):
         self.points = points
         self.holes = holes
+
         assert isinstance(boundary_types, dict) or isinstance(boundary_types, FunctionInterface)
+
+        # if the |BoundaryTypes| are given as a |Function|, then evaluate this |Function| at the edge centers.
         if isinstance(boundary_types, FunctionInterface):
             points = [points]
             points.extend(holes)
+            # shift points 1 entry to the left.
             points_deque = [collections.deque(ps) for ps in points]
             for ps_d in points_deque:
                 ps_d.rotate(-1)
+            # compute edge centers.
             centers = [[(p0[0]+p1[0])/2, (p0[1]+p1[1])/2] for ps, ps_d in zip(points, points_deque)
                        for p0, p1 in zip(ps, ps_d)]
+            # evaluate the boundary |Function| at the edge centers and save the |BoundaryTypes| together with the
+            # corresponding edge id.
             self.boundary_types = dict(zip([boundary_types(centers)], [range(1, len(centers)+1)]))
         else:
             self.boundary_types = boundary_types
@@ -287,6 +312,18 @@ class PolygonalDomain(DomainDescriptionInterface):
 
 
 class PieDomain(PolygonalDomain):
+    """Describes a circle domain with a piece of variable angle cut out.
+
+    Parameters
+    ----------
+    angle
+        The angle between 0 and 2*pi that is left to the domain, so that the cut out piece has an angle of 2*pi-angle.
+    num_points
+        The number of points that describe the polygonal chain bounding the domain.
+    Attributes
+    ----------
+    angle
+    """
 
     def __init__(self, angle, num_points=100):
         self.angle = angle
