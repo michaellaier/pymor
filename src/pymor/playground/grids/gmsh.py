@@ -170,6 +170,13 @@ def parse_gmsh_file(f):
 
 
 class GmshGrid(UnstructuredTriangleGrid):
+    """An unstructured triangular grid that is build from an existing Gmsh MSH-file.
+
+    Parameters
+    ----------
+    gmsh_file
+        File handle of the Gmsh file.
+    """
 
     def __init__(self, gmsh_file):
         self.logger.info('Parsing gmsh file ...')
@@ -193,14 +200,25 @@ class GmshGrid(UnstructuredTriangleGrid):
 
 
 class GmshBoundaryInfo(BoundaryInfoInterface):
+    """|BoundaryInfo| where |BoundaryTypes| are determined by a Gmsh MSH-file.
+
+    Parameters
+    ----------
+    grid
+        The corresponding grid of type |GmshGrid|.
+    gmsh_file
+        File handle of the Gmsh file.
+    """
 
     def __init__(self, grid, gmsh_file):
         assert isinstance(grid, GmshGrid)
         self.logger.info('Parsing gmsh file ...')
         sections = parse_gmsh_file(gmsh_file)
 
+        # Save |BoundaryTypes|.
         self.boundary_types = [BoundaryType(pn[2]) for pn in sections['PhysicalNames'] if pn[1] == 1]
 
+        # Compute ids, since Gmsh starts numbering with 1 instead of 0.
         name_ids = dict(zip([pn[0] for pn in sections['PhysicalNames']], np.arange(len(sections['PhysicalNames']),
                                                                                    dtype=np.int32)))
         node_ids = dict(zip([n[0] for n in sections['Nodes']], np.arange(len(sections['Nodes']), dtype=np.int32)))
@@ -208,6 +226,7 @@ class GmshBoundaryInfo(BoundaryInfoInterface):
         if 'line' in sections['Elements']:
             superentities = grid.superentities(2, 1)
 
+            # find the edge for given vertices.
             def find_edge(vertices):
                 edge_set = set(superentities[vertices[0]]).intersection(superentities[vertices[1]]) - {-1}
                 if len(edge_set) != 1:
@@ -216,6 +235,7 @@ class GmshBoundaryInfo(BoundaryInfoInterface):
 
             line_ids = {l[0]: find_edge([node_ids[l[2][0]], node_ids[l[2][1]]]) for l in sections['Elements']['line']}
 
+        # compute boundary masks for all |BoundaryTypes|.
         masks = {}
         for bt in self.boundary_types:
             masks[bt] = [np.array([False]*grid.size(1)), np.array([False]*grid.size(2))]
