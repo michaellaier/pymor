@@ -332,7 +332,7 @@ class PieDomain(PolygonalDomain):
 
         points = [[0., 0.]]
         points.extend([[cos(a), sin(a)] for a in np.linspace(start=0, stop=angle, num=num_points, endpoint=True)])
-        boundary_types = {BoundaryType('dirichlet'): range(1, len(points[0])+1)}
+        boundary_types = {BoundaryType('dirichlet'): range(1, len(points)+1)}
 
         super(PieDomain, self).__init__(points, boundary_types)
 
