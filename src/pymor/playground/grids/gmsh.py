@@ -7,6 +7,7 @@ from __future__ import absolute_import, division, print_function
 from collections import defaultdict
 
 import numpy as np
+import time
 
 from pymor.grids.unstructured import UnstructuredTriangleGrid
 
@@ -180,7 +181,10 @@ class GmshGrid(UnstructuredTriangleGrid):
 
     def __init__(self, gmsh_file):
         self.logger.info('Parsing gmsh file ...')
+        tic = time.time()
         sections = parse_gmsh_file(gmsh_file)
+        toc = time.time()
+        self.logger.info('Parsing took {} s ...'.format(toc - tic))
 
         self.logger.info('Checking if grid is a 2d triangular grid ...')
         assert {'Nodes', 'Elements', 'PhysicalNames'} <= set(sections.keys())
@@ -211,9 +215,13 @@ class GmshBoundaryInfo(BoundaryInfoInterface):
     """
 
     def __init__(self, grid, gmsh_file):
+        self.grid = grid
         assert isinstance(grid, GmshGrid)
         self.logger.info('Parsing gmsh file ...')
+        tic = time.time()
         sections = parse_gmsh_file(gmsh_file)
+        toc = time.time()
+        self.logger.info('Parsing took {} s ...'.format(toc - tic))
 
         # Save |BoundaryTypes|.
         self.boundary_types = [BoundaryType(pn[2]) for pn in sections['PhysicalNames'] if pn[1] == 1]
