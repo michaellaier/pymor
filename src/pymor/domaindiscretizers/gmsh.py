@@ -4,6 +4,7 @@ import tempfile
 import collections
 import os
 import sys
+import time
 
 from pymor.domaindescriptions.basic import PolygonalDomain
 from pymor.playground.grids.gmsh import GmshBoundaryInfo
@@ -102,6 +103,7 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
             msh_file.close()
 
         # Run Gmsh
+        tic = time.time()
         try:
             from subprocess import PIPE, Popen, CalledProcessError
             gmsh = Popen(['gmsh', geo_file_path, '-2', '-algo', mesh_algorithm, '-clscale', str(clscale), '-clmin',
@@ -114,10 +116,18 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
             print('Gmsh encountered an error: {}'.format(e))
         except:
             print('Gmsh encountered an unexpected error: {}'.format(sys.exc_info()[0]))
+        toc = time.time()
+        t_gmsh = toc- tic
 
         # Create |GmshGrid| and |GmshBoundaryInfo| form the just created MSH-file.
+        tic = time.time()
         grid = GmshGrid(open(msh_file_path))
+        toc = time.time()
+        t_grid = toc - tic
+        tic = time.time()
         bi = GmshBoundaryInfo(grid, open(msh_file_path))
+        toc = time.time()
+        t_bi = toc - tic
     finally:
         # delete tempfiles if they were created beforehand.
         if isinstance(geo_file, tempfile._TemporaryFileWrapper):
@@ -125,4 +135,5 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
         if isinstance(msh_file, tempfile._TemporaryFileWrapper):
             os.remove(msh_file_path)
 
+    print('Gmsh took {} s; Grid creation took {} s; BoundaryInfo creation took {} s'.format(t_gmsh, t_grid, t_bi))
     return grid, bi
