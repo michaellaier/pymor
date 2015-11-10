@@ -67,7 +67,8 @@ def gmsh_elliptic_demo(args):
         return np.power(r, np.pi/args['ANGLE']) * np.sin(phi*np.pi/args['ANGLE'])
     solution = GenericFunction(ref_sol, 2)
     U_ref = NumpyVectorArray(solution(grid.centers(2)))
-    discretization.visualize((U, U_ref, U-U_ref), separate_colorbars=True)
+    discretization.visualize((U, U_ref, U-U_ref), legend=('Solution', 'Reference Solution', 'Error'),
+                             separate_colorbars=True, block=True)
 
     print('')
 
