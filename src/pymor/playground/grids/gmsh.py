@@ -1,6 +1,8 @@
 # This file is part of the pyMOR project (http://www.pymor.org).
 # Copyright Holders: Rene Milk, Stephan Rave, Felix Schindler
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
+#
+# Contributors: Michael Laier <m_laie01@uni-muenster.de>
 
 from __future__ import absolute_import, division, print_function
 
@@ -14,6 +16,7 @@ from pymor.grids.unstructured import UnstructuredTriangleGrid
 from pymor.domaindescriptions.boundarytypes import BoundaryType
 from pymor.grids.interfaces import BoundaryInfoInterface
 
+from pymor.core.logger import getLogger
 
 class GmshParseError(Exception):
     pass
@@ -175,17 +178,11 @@ class GmshGrid(UnstructuredTriangleGrid):
 
     Parameters
     ----------
-    gmsh_file
-        File handle of the Gmsh file.
+    sections
+        Parsed sections of the MSH-file.
     """
 
-    def __init__(self, gmsh_file):
-        self.logger.info('Parsing gmsh file ...')
-        tic = time.time()
-        sections = parse_gmsh_file(gmsh_file)
-        toc = time.time()
-        self.logger.info('Parsing took {} s ...'.format(toc - tic))
-
+    def __init__(self, sections):
         self.logger.info('Checking if grid is a 2d triangular grid ...')
         assert {'Nodes', 'Elements', 'PhysicalNames'} <= set(sections.keys())
         assert set(sections['Elements'].keys()) <= {'line', 'triangle'}
@@ -210,18 +207,13 @@ class GmshBoundaryInfo(BoundaryInfoInterface):
     ----------
     grid
         The corresponding grid of type |GmshGrid|.
-    gmsh_file
-        File handle of the Gmsh file.
+    sections
+        Parsed sections of the MSH-file.
     """
 
-    def __init__(self, grid, gmsh_file):
-        self.grid = grid
+    def __init__(self, grid, sections):
         assert isinstance(grid, GmshGrid)
-        self.logger.info('Parsing gmsh file ...')
-        tic = time.time()
-        sections = parse_gmsh_file(gmsh_file)
-        toc = time.time()
-        self.logger.info('Parsing took {} s ...'.format(toc - tic))
+        self.grid = grid
 
         # Save |BoundaryTypes|.
         self.boundary_types = [BoundaryType(pn[2]) for pn in sections['PhysicalNames'] if pn[1] == 1]
@@ -259,3 +251,42 @@ class GmshBoundaryInfo(BoundaryInfoInterface):
         assert 1 <= codim <= self.grid.dim
         assert boundary_type in self.boundary_types
         return self._masks[boundary_type][codim - 1]
+
+
+def load_gmsh(gmsh_file):
+    """Parse the Gmsh file and create a |GmshGrid| and |GmshBoundaryInfo|.
+
+    Parameters
+    ----------
+    gmsh_file
+        File handle of the Gmsh file.
+    Returns
+    -------
+    grid
+        The generated |GmshGrid|.
+    boundary_info
+        The generated |GmshBoundaryInfo|.
+    """
+    logger = getLogger('pymor.playground.grids.gmsh.load_gmsh')
+
+    logger.info('Parsing gmsh file ...')
+    tic = time.time()
+    sections = parse_gmsh_file(gmsh_file)
+    toc = time.time()
+    t_parse = toc - tic
+
+    logger.info('Create GmshGrid ...')
+    tic = time.time()
+    grid = GmshGrid(sections)
+    toc = time.time()
+    t_grid = toc - tic
+
+    logger.info('Create GmshBoundaryInfo ...')
+    tic = time.time()
+    bi = GmshBoundaryInfo(grid, sections)
+    toc = time.time()
+    t_bi = toc - tic
+
+    logger.info('Parsing took {} s; Grid creation took {} s; BoundaryInfo creation took {} s'.format(t_parse, t_grid, t_bi))
+
+    return grid, bi
