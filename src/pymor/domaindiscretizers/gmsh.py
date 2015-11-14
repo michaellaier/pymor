@@ -11,9 +11,11 @@ import collections
 import os
 import time
 
+import numpy as np
+
 from subprocess import PIPE, Popen, CalledProcessError
 
-from pymor.domaindescriptions.basic import PolygonalDomain
+from pymor.domaindescriptions.basic import PolygonalDomain, RectDomain
 from pymor.playground.grids.gmsh import load_gmsh
 
 from pymor.core.logger import getLogger
@@ -55,10 +57,40 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
     """
     assert domain_description is None or geo_file is None
 
+    def discretize_PolygonalDomain():
+        # combine points and holes, since holes are points, too, and have to be stored as such.
+        points = [domain_description.points]
+        points.extend(domain_description.holes)
+
+        return points, domain_description.boundary_types
+
+    def discretize_RectDomain():
+        points = [[domain_description.domain[0].tolist(), [domain_description.domain[1][0], 0],
+                  domain_description.domain[1].tolist(), [0, domain_description.domain[1][1]]]]
+        boundary_types = {}
+        boundary_types[domain_description.bottom] = [1]
+        if domain_description.right not in boundary_types:
+            boundary_types[domain_description.right] = [2]
+        else:
+            boundary_types[domain_description.right].append(2)
+        if domain_description.top not in boundary_types:
+            boundary_types[domain_description.top] = [3]
+        else:
+            boundary_types[domain_description.top].append(3)
+        if domain_description.left not in boundary_types:
+            boundary_types[domain_description.left] = [4]
+        else:
+            boundary_types[domain_description.left].append(4)
+
+        if None in boundary_types:
+            del boundary_types[None]
+
+        return points, boundary_types
+
+
     try:
         # When a |PolygonalDomain| has to be discretized create a Gmsh GE0-file and write all data.
         if domain_description is not None:
-            assert isinstance(domain_description, PolygonalDomain)
             # Create a temporary GEO-file if None is specified
             if geo_file_path is None:
                 geo_file = tempfile.NamedTemporaryFile(delete=False, suffix='.geo')
@@ -66,9 +98,13 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
             else:
                 geo_file = open(geo_file_path, 'w')
 
-            # combine points and holes, since holes are points, too, and have to be stored as such.
-            points = [domain_description.points]
-            points.extend(domain_description.holes)
+            if isinstance(domain_description, PolygonalDomain):
+                points, boundary_types = discretize_PolygonalDomain()
+            elif isinstance(domain_description, RectDomain):
+                points, boundary_types = discretize_RectDomain()
+            else:
+                raise NotImplementedError('I do not know how to discretize {}'.format(domain_description))
+
             # assign ids to all points and write them to the GEO-file.
             for id, p in enumerate([p for ps in points for p in ps]):
                 assert len(p) == 2
@@ -84,7 +120,7 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
             lines = [[point_ids[str(p0)], point_ids[str(p1)]] for ps, ps_d in zip(points, points_deque) for p0, p1 in zip(ps, ps_d)]
             # assign ids to all lines and write them to the GEO-file.
             for l_id, l in enumerate(lines):
-                    geo_file.write('Line('+str(l_id+1)+')'+' = '+str(l).replace('[', '{').replace(']', '}')+';\n')
+                geo_file.write('Line('+str(l_id+1)+')'+' = '+str(l).replace('[', '{').replace(']', '}')+';\n')
 
             # form line_loops (polygonal chains), create ids and write them to file.
             line_loops = [[point_ids[str(p)] for p in ps] for ps in points]
@@ -92,12 +128,12 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
             for ll_id, ll in zip(line_loop_ids, line_loops):
                 geo_file.write('Line Loop('+str(ll_id)+')'+' = '+str(ll).replace('[', '{').replace(']', '}')+';\n')
 
-            #create the surface defined by line loops, starting with the exterior and then the holes.
+            # create the surface defined by line loops, starting with the exterior and then the holes.
             geo_file.write('Plane Surface('+str(line_loop_ids[0]+1)+')'+' = '+str(line_loop_ids).replace('[', '{').replace(']', '}')+';\n')
             geo_file.write('Physical Surface("boundary") = {'+str(line_loop_ids[0]+1)+'};\n')
 
             # write boundaries.
-            for boundary_type, bs in domain_description.boundary_types.iteritems():
+            for boundary_type, bs in boundary_types.iteritems():
                 geo_file.write('Physical Line'+'("'+str(boundary_type)+'")'+' = '+str([l_id for l_id in bs]).replace('[', '{').replace(']', '}')+';\n')
 
             geo_file.close()
