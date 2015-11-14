@@ -1,6 +1,8 @@
 # This file is part of the pyMOR project (http://www.pymor.org).
 # Copyright Holders: Rene Milk, Stephan Rave, Felix Schindler
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
+#
+# Contributors: Michael Laier <m_laie01@uni-muenster.de>
 
 from __future__ import absolute_import, division, print_function
 
@@ -272,7 +274,7 @@ class PolygonalDomain(DomainDescriptionInterface):
     points
         List of points [x_0, x_1] that describe the polygonal chain that bounds the domain.
     boundary_types
-        Either a dictionary {'boundary_type_0': [i_0, ...], 'boundary_type_1': [j_0, ...], ...} with i_0, ... being the
+        Either a dictionary {BoundaryType: [i_0, ...], BoundaryType: [j_0, ...], ...} with i_0, ... being the
         id of the line (starting with 0) that connects the corresponding points.
         Or a function that returns the boundary type for a given coordinate.
     holes
@@ -288,10 +290,10 @@ class PolygonalDomain(DomainDescriptionInterface):
         self.points = points
         self.holes = holes
 
-        assert isinstance(boundary_types, dict) or isinstance(boundary_types, FunctionInterface)
-
-        # if the |BoundaryTypes| are given as a |Function|, then evaluate this |Function| at the edge centers.
-        if isinstance(boundary_types, FunctionInterface):
+        if isinstance(boundary_types, dict):
+            self.boundary_types = boundary_types
+        # if the |BoundaryTypes| are not given as a dict, try to evaluate at the edge centers to get a dict.
+        else:
             points = [points]
             points.extend(holes)
             # shift points 1 entry to the left.
@@ -301,23 +303,29 @@ class PolygonalDomain(DomainDescriptionInterface):
             # compute edge centers.
             centers = [[(p0[0]+p1[0])/2, (p0[1]+p1[1])/2] for ps, ps_d in zip(points, points_deque)
                        for p0, p1 in zip(ps, ps_d)]
-            # evaluate the boundary |Function| at the edge centers and save the |BoundaryTypes| together with the
+            # evaluate the boundary at the edge centers and save the |BoundaryTypes| together with the
             # corresponding edge id.
             self.boundary_types = dict(zip([boundary_types(centers)], [range(1, len(centers)+1)]))
-        else:
-            self.boundary_types = boundary_types
+
+        # check if the dict keys are given as |BoundaryType|
+        for bt in self.boundary_types.iterkeys():
+            assert isinstance(bt, BoundaryType)
 
     def __repr__(self):
         return 'PolygonalDomain'
 
 
-class PieDomain(PolygonalDomain):
-    """Describes a circle domain with a piece of variable angle cut out.
+class CircularSectorDomain(PolygonalDomain):
+    """Describes a circular sector domain of radius 1.
 
     Parameters
     ----------
     angle
-        The angle between 0 and 2*pi that is left to the domain, so that the cut out piece has an angle of 2*pi-angle.
+        The angle between 0 and 2*pi of the circular sector.
+    arc
+        The |BoundaryType| of the arc.
+    radii
+        The |BoundaryType| of the two radii.
     num_points
         The number of points that describe the polygonal chain bounding the domain.
     Attributes
@@ -325,16 +333,56 @@ class PieDomain(PolygonalDomain):
     angle
     """
 
-    def __init__(self, angle, num_points=100):
+    def __init__(self, angle, arc=BoundaryType('dirichlet'), radii=BoundaryType('dirichlet'), num_points=100):
         self.angle = angle
         from math import pi, cos, sin
         assert (0 < angle) and (angle < 2*pi)
+        assert arc is None or isinstance(arc, BoundaryType)
+        assert radii is None or isinstance(radii, BoundaryType)
 
         points = [[0., 0.]]
-        points.extend([[cos(a), sin(a)] for a in np.linspace(start=0, stop=angle, num=num_points, endpoint=True)])
-        boundary_types = {BoundaryType('dirichlet'): range(1, len(points)+1)}
+        points.extend([[cos(t), sin(t)] for t in np.linspace(start=0, stop=angle, num=num_points, endpoint=True)])
 
-        super(PieDomain, self).__init__(points, boundary_types)
+        if arc == radii:
+            boundary_types = {arc: range(1, len(points)+1)}
+        else:
+            boundary_types = {arc: range(2, len(points))}
+            boundary_types.update({radii: [1, len(points)]})
+
+        if None in boundary_types:
+            del boundary_types[None]
+
+        super(CircularSectorDomain, self).__init__(points, boundary_types)
 
     def __repr__(self):
         return 'PieDomain({})'.format(self.angle)
+
+
+class DiscDomain(PolygonalDomain):
+    """Describes a disc domain of variable radius.
+
+    Parameters
+    ----------
+    angle
+        The angle between 0 and 2*pi of the circular sector.
+    boundary
+        The |BoundaryType| of the boundary.
+    num_points
+        The number of points that describe the polygonal chain bounding the domain.
+    Attributes
+    ----------
+    radius
+    """
+
+    def __init__(self, radius, boundary=BoundaryType('dirichlet'), num_points = 100):
+        self.radius = radius
+        from math import pi, cos, sin
+        assert radius > 0
+
+        points = [[radius*cos(t), radius*sin(t)] for t in np.linspace(start=0, stop=2*pi, num=num_points, endpoint=False)]
+        boundary_types = {} if boundary is None else {boundary: range(1, len(points)+1)}
+
+        super(DiscDomain, self).__init__(points, boundary_types)
+
+    def __repr__(self):
+        return 'DiscDomain({})'.format(self.radius)
