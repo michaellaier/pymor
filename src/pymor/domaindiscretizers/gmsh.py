@@ -1,18 +1,26 @@
+# This file is part of the pyMOR project (http://www.pymor.org).
+# Copyright Holders: Rene Milk, Stephan Rave, Felix Schindler
+# License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
+#
+# Contributors: Michael Laier <m_laie01@uni-muenster.de>
+
 from __future__ import absolute_import, division, print_function
 
 import tempfile
 import collections
 import os
-import sys
 import time
 
+from subprocess import PIPE, Popen, CalledProcessError
+
 from pymor.domaindescriptions.basic import PolygonalDomain
-from pymor.playground.grids.gmsh import GmshBoundaryInfo
-from pymor.playground.grids.gmsh import GmshGrid
+from pymor.playground.grids.gmsh import load_gmsh
+
+from pymor.core.logger import getLogger
 
 
 def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, msh_file_path=None,
-                    mesh_algorithm='meshadapt', clscale=1., clmin=0.1, clmax=0.2, options=''):
+                    mesh_algorithm='del2d', clscale=1., clmin=0.1, clmax=0.2, options=''):
     """Discretize a |DomainDescription| of a |PolygonalDomain| or a already existing Gmsh GEO-file using the Gmsh
     Mesh module.
 
@@ -28,7 +36,7 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
     msh_file_path
         Path to the Gmsh GEO-file. If None a temporary file will be created.
     mesh_algorithm
-        The algorithm used to mesh the domain (meshadapt, del2d, front2d, delquad, del3d, front3d, mmg3d, pack).
+        The algorithm used to mesh the domain (meshadapt, del2d, front2d).
     clscale
         Mesh element size scaling factor.
     clmin
@@ -104,30 +112,25 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
 
         # Run Gmsh
         tic = time.time()
-        try:
-            from subprocess import PIPE, Popen, CalledProcessError
-            gmsh = Popen(['gmsh', geo_file_path, '-2', '-algo', mesh_algorithm, '-clscale', str(clscale), '-clmin',
-                          str(clmin), '-clmax', str(clmax), options, '-o', msh_file_path], stdout=PIPE, stderr=PIPE)
-            out, err = gmsh.communicate()
-            print(out)
-            if gmsh.returncode != 0:
-                print(err)
-        except (OSError, ValueError) as e:
-            print('Gmsh encountered an error: {}'.format(e))
-        except:
-            print('Gmsh encountered an unexpected error: {}'.format(sys.exc_info()[0]))
+        cmd = ['gmsh', geo_file_path, '-2', '-algo', mesh_algorithm, '-clscale', str(clscale), '-clmin', str(clmin),
+               '-clmax', str(clmax), options, '-o', msh_file_path]
+        gmsh = Popen(cmd, stdout=PIPE, stderr=PIPE)
+        out, err = gmsh.communicate()
+        print(out)
+        if gmsh.returncode != 0:
+            print(err)
+            raise CalledProcessError(gmsh.returncode, cmd=cmd, output=err)
+            # gmsh = Popen(['gmsh', msh_file_path, '-refine', '-o', msh_file_path], stdout=PIPE, stderr=PIPE)
+            # out, err = gmsh.communicate()
+            # print(out)
+            # if gmsh.returncode != 0:
+            #     print(err)
         toc = time.time()
-        t_gmsh = toc- tic
+        t_gmsh = toc - tic
+        getLogger('pymor.domaindiscretizers.gmsh.discretize_Gmsh').info('Gmsh took {}s'.format(t_gmsh))
 
         # Create |GmshGrid| and |GmshBoundaryInfo| form the just created MSH-file.
-        tic = time.time()
-        grid = GmshGrid(open(msh_file_path))
-        toc = time.time()
-        t_grid = toc - tic
-        tic = time.time()
-        bi = GmshBoundaryInfo(grid, open(msh_file_path))
-        toc = time.time()
-        t_bi = toc - tic
+        grid, bi = load_gmsh(open(msh_file_path))
     finally:
         # delete tempfiles if they were created beforehand.
         if isinstance(geo_file, tempfile._TemporaryFileWrapper):
@@ -135,5 +138,4 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
         if isinstance(msh_file, tempfile._TemporaryFileWrapper):
             os.remove(msh_file_path)
 
-    print('Gmsh took {} s; Grid creation took {} s; BoundaryInfo creation took {} s'.format(t_gmsh, t_grid, t_bi))
     return grid, bi
