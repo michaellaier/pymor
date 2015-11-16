@@ -22,7 +22,7 @@ from pymor.core.logger import getLogger
 
 
 def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, msh_file_path=None,
-                    mesh_algorithm='del2d', clscale=1., clmin=0.1, clmax=0.2, options=''):
+                    mesh_algorithm='del2d', clscale=1., clmin=0.1, clmax=0.2, options='', refinement_steps=0):
     """Discretize a |DomainDescription| of a |PolygonalDomain| or a already existing Gmsh GEO-file using the Gmsh
     Mesh module.
 
@@ -48,6 +48,8 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
     options
         Other options to control the meshing procedure of Gmsh. See
         http://geuz.org/gmsh/doc/texinfo/gmsh.html#Command_002dline-options for all available options.
+    refinement_steps
+        Number of refinement steps to do after the initial meshing.
     Returns
     -------
     grid
@@ -56,6 +58,7 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
         The generated |GmshBoundaryInfo|.
     """
     assert domain_description is None or geo_file is None
+    logger = getLogger('pymor.domaindiscretizers.gmsh.discretize_Gmsh')
 
     def discretize_PolygonalDomain():
         # combine points and holes, since holes are points, too, and have to be stored as such.
@@ -86,7 +89,6 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
             del boundary_types[None]
 
         return points, boundary_types
-
 
     try:
         # When a |PolygonalDomain| has to be discretized create a Gmsh GE0-file and write all data.
@@ -146,8 +148,9 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
             msh_file_path = msh_file.name
             msh_file.close()
 
-        # Run Gmsh
         tic = time.time()
+
+        # run Gmsh; initial meshing
         cmd = ['gmsh', geo_file_path, '-2', '-algo', mesh_algorithm, '-clscale', str(clscale), '-clmin', str(clmin),
                '-clmax', str(clmax), options, '-o', msh_file_path]
         gmsh = Popen(cmd, stdout=PIPE, stderr=PIPE)
@@ -156,14 +159,21 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
         if gmsh.returncode != 0:
             print(err)
             raise CalledProcessError(gmsh.returncode, cmd=cmd, output=err)
-            # gmsh = Popen(['gmsh', msh_file_path, '-refine', '-o', msh_file_path], stdout=PIPE, stderr=PIPE)
-            # out, err = gmsh.communicate()
-            # print(out)
-            # if gmsh.returncode != 0:
-            #     print(err)
+
+        # run gmsh; perform mesh refinement
+        cmd = ['gmsh', msh_file_path, '-refine', '-o', msh_file_path]
+        for i in xrange(refinement_steps):
+            logger.info('Performing Gmsh refinement step {}'.format(i+1))
+            gmsh = Popen(cmd, stdout=PIPE, stderr=PIPE)
+            out, err = gmsh.communicate()
+            print(out)
+            if gmsh.returncode != 0:
+                print(err)
+                raise CalledProcessError(gmsh.returncode, cmd=cmd, output=err)
+
         toc = time.time()
         t_gmsh = toc - tic
-        getLogger('pymor.domaindiscretizers.gmsh.discretize_Gmsh').info('Gmsh took {}s'.format(t_gmsh))
+        logger.info('Gmsh took {} s'.format(t_gmsh))
 
         # Create |GmshGrid| and |GmshBoundaryInfo| form the just created MSH-file.
         grid, bi = load_gmsh(open(msh_file_path))
