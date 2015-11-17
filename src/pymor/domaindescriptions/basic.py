@@ -374,7 +374,7 @@ class DiscDomain(PolygonalDomain):
     radius
     """
 
-    def __init__(self, radius, boundary=BoundaryType('dirichlet'), num_points = 100):
+    def __init__(self, radius, boundary=BoundaryType('dirichlet'), num_points=100):
         self.radius = radius
         from math import pi, cos, sin
         assert radius > 0

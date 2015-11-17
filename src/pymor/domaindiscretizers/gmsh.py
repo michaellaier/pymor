@@ -68,8 +68,8 @@ def discretize_Gmsh(domain_description=None, geo_file=None, geo_file_path=None, 
         return points, domain_description.boundary_types
 
     def discretize_RectDomain():
-        points = [[domain_description.domain[0].tolist(), [domain_description.domain[1][0], 0],
-                  domain_description.domain[1].tolist(), [0, domain_description.domain[1][1]]]]
+        points = [[domain_description.domain[0].tolist(), [domain_description.domain[1][0], domain_description.domain[0][1]],
+                  domain_description.domain[1].tolist(), [domain_description.domain[0][0], domain_description.domain[1][1]]]]
         boundary_types = {}
         boundary_types[domain_description.bottom] = [1]
         if domain_description.right not in boundary_types:

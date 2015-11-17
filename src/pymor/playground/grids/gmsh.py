@@ -197,7 +197,7 @@ class GmshGrid(UnstructuredTriangleGrid):
         super(GmshGrid, self).__init__(vertices, faces)
 
     def __str__(self):
-        return 'GmshGrid with {} triangles, {} lines, {} vertices'.format(*self.__sizes)
+        return 'GmshGrid with {} triangles, {} edges, {} vertices'.format(*self.__sizes)
 
 
 class GmshBoundaryInfo(BoundaryInfoInterface):
