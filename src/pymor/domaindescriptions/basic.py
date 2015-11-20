@@ -308,20 +308,21 @@ class PolygonalDomain(DomainDescriptionInterface):
             self.boundary_types = dict(zip([boundary_types(centers)], [range(1, len(centers)+1)]))
 
         # check if the dict keys are given as |BoundaryType|
-        for bt in self.boundary_types.iterkeys():
-            assert isinstance(bt, BoundaryType)
+        assert all(isinstance(bt, BoundaryType) for bt in self.boundary_types.iterkeys())
 
     def __repr__(self):
-        return 'PolygonalDomain'
+        return 'PolygonalDomain({}, {}, {})'.format(repr(self.points), repr(self.boundary_types), repr(self.holes))
 
 
 class CircularSectorDomain(PolygonalDomain):
-    """Describes a circular sector domain of radius 1.
+    """Describes a circular sector domain of variable radius.
 
     Parameters
     ----------
     angle
         The angle between 0 and 2*pi of the circular sector.
+    radius
+        The radius of the circular sector.
     arc
         The |BoundaryType| of the arc.
     radii
@@ -331,23 +332,33 @@ class CircularSectorDomain(PolygonalDomain):
     Attributes
     ----------
     angle
+    radius
+    arc
+    radii
+    num_points
     """
 
-    def __init__(self, angle, arc=BoundaryType('dirichlet'), radii=BoundaryType('dirichlet'), num_points=100):
+    def __init__(self, angle, radius, arc=BoundaryType('dirichlet'), radii=BoundaryType('dirichlet'), num_points=100):
         self.angle = angle
-        from math import pi, cos, sin
-        assert (0 < angle) and (angle < 2*pi)
-        assert arc is None or isinstance(arc, BoundaryType)
-        assert radii is None or isinstance(radii, BoundaryType)
+        self.radius = radius
+        self.arc = arc
+        self.radii = radii
+        self.num_points = num_points
+        assert (0 < self.angle) and (self.angle < 2*np.pi)
+        assert self.radius > 0
+        assert self.arc is None or isinstance(self.arc, BoundaryType)
+        assert self.radii is None or isinstance(self.radii, BoundaryType)
+        assert self.num_points > 0
 
         points = [[0., 0.]]
-        points.extend([[cos(t), sin(t)] for t in np.linspace(start=0, stop=angle, num=num_points, endpoint=True)])
+        points.extend([[self.radius*np.cos(t), self.radius*np.sin(t)] for t in
+                       np.linspace(start=0, stop=angle, num=self.num_points, endpoint=True)])
 
-        if arc == radii:
-            boundary_types = {arc: range(1, len(points)+1)}
+        if self.arc == self.radii:
+            boundary_types = {self.arc: range(1, len(points)+1)}
         else:
-            boundary_types = {arc: range(2, len(points))}
-            boundary_types.update({radii: [1, len(points)]})
+            boundary_types = {self.arc: range(2, len(points))}
+            boundary_types.update({self.radii: [1, len(points)]})
 
         if None in boundary_types:
             del boundary_types[None]
@@ -355,7 +366,8 @@ class CircularSectorDomain(PolygonalDomain):
         super(CircularSectorDomain, self).__init__(points, boundary_types)
 
     def __repr__(self):
-        return 'PieDomain({})'.format(self.angle)
+        return 'PieDomain({}, {}, {}, {}, {})'.format(repr(self.angle), repr(self.radius), repr(self.arc),
+                                                      repr(self.radii), repr(self.num_points))
 
 
 class DiscDomain(PolygonalDomain):
@@ -363,8 +375,8 @@ class DiscDomain(PolygonalDomain):
 
     Parameters
     ----------
-    angle
-        The angle between 0 and 2*pi of the circular sector.
+    radius
+        The radius of the disc.
     boundary
         The |BoundaryType| of the boundary.
     num_points
@@ -372,17 +384,23 @@ class DiscDomain(PolygonalDomain):
     Attributes
     ----------
     radius
+    boundary
+    num_points
     """
 
     def __init__(self, radius, boundary=BoundaryType('dirichlet'), num_points=100):
         self.radius = radius
-        from math import pi, cos, sin
-        assert radius > 0
+        self.boundary = boundary
+        self.num_points = num_points
+        assert self.radius > 0
+        assert self.boundary is None or isinstance(self.boundary, BoundaryType)
+        assert self.num_points > 0
 
-        points = [[radius*cos(t), radius*sin(t)] for t in np.linspace(start=0, stop=2*pi, num=num_points, endpoint=False)]
-        boundary_types = {} if boundary is None else {boundary: range(1, len(points)+1)}
+        points = [[self.radius*np.cos(t), self.radius*np.sin(t)] for t in
+                  np.linspace(start=0, stop=2*np.pi, num=num_points, endpoint=False)]
+        boundary_types = {} if self.boundary is None else {boundary: range(1, len(points)+1)}
 
         super(DiscDomain, self).__init__(points, boundary_types)
 
     def __repr__(self):
-        return 'DiscDomain({})'.format(self.radius)
+        return 'DiscDomain({}, {}, {})'.format(repr(self.radius), repr(self.boundary), repr(self.num_points))
