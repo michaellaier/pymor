@@ -8,14 +8,6 @@ import warnings
 
 warn = warnings.warn
 
-try:
-    import contracts
-    ContractNotRespected = contracts.ContractNotRespected
-    ContractException = contracts.ContractException
-except ImportError:
-    pass
-
-
 class ConstError(Exception):
     """I get thrown when you try to add a new member to
     a locked class instance"""
@@ -44,3 +36,7 @@ class NewtonError(Exception):
 
 class SIDGenerationError(Exception):
     """Is raised when generate_sid fails."""
+
+
+class GmshError(Exception):
+    """Is raised when a Gmsh related error occurs."""

@@ -26,6 +26,8 @@ interfaces = '''
 .. |Grid| replace:: :class:`Grid <pymor.grids.interfaces.AffineGridInterface>`
 .. |Grids| replace:: :class:`Grids <pymor.grids.interfaces.AffineGridInterface>`
 .. |ImmutableInterface| replace:: :class:`~pymor.core.interfaces.ImmutableInterface`
+.. |immutable| replace:: :class:`immutable <pymor.core.interfaces.ImmutableInterface>`
+.. |Immutable| replace:: :class:`Immutable <pymor.core.interfaces.ImmutableInterface>`
 .. |LincombOperators| replace:: :class:`LincombOperators <pymor.operators.constructions.LincombOperator>`
 .. |LincombOperator| replace:: :class:`LincombOperator <pymor.operators.constructions.LincombOperator>`
 .. |Operators| replace:: :class:`Operators <pymor.operators.interfaces.OperatorInterface>`
@@ -35,8 +37,12 @@ interfaces = '''
 .. |ParameterSpace| replace:: :class:`ParameterSpace <pymor.parameters.interfaces.ParameterSpaceInterface>`
 .. |ReferenceElements| replace:: :class:`ReferenceElements <pymor.grids.interfaces.ReferenceElementInterface>`
 .. |ReferenceElement| replace:: :class:`ReferenceElement <pymor.grids.interfaces.ReferenceElementInterface>`
+.. |RemoteObject| replace:: :class:`RemoteObject <pymor.parallel.interfaces.RemoteObjectInterface>`
+.. |RemoteObjects| replace:: :class:`RemoteObjects <pymor.parallel.interfaces.RemoteObjectInterface>`
 .. |VectorArrays| replace:: :class:`VectorArrays <pymor.vectorarrays.interfaces.VectorArrayInterface>`
 .. |VectorArray| replace:: :class:`VectorArray <pymor.vectorarrays.interfaces.VectorArrayInterface>`
+.. |WorkerPool| replace:: :class:`WorkerPool <pymor.parallel.interfaces.WorkerPoolInterface>`
+.. |WorkerPools| replace:: :class:`WorkerPools <pymor.parallel.interfaces.WorkerPoolInterface>`
 
 '''
 
@@ -59,6 +65,7 @@ common = '''
 .. |BoundaryType| replace:: :class:`~pymor.domaindescriptions.boundarytypes.BoundaryType`
 .. |BoundaryTypes| replace:: :class:`BoundaryTypes <pymor.domaindescriptions.boundarytypes.BoundaryType>`
 .. |RectDomain| replace:: :class:`~pymor.domaindescriptions.basic.RectDomain`
+.. |PolygonalDomain| replace:: :class:`~pymor.domaindescriptions.polygonal.PolygonalDomain`
 .. |CylindricalDomain| replace:: :class:`~pymor.domaindescriptions.basic.CylindricalDomain`
 .. |TorusDomain| replace:: :class:`~pymor.domaindescriptions.basic.TorusDomain`
 .. |LineDomain| replace:: :class:`~pymor.domaindescriptions.basic.LineDomain`
@@ -106,7 +113,7 @@ common = '''
 
 .. |OrderedDict| replace:: :class:`~collections.OrderedDict`
 
-.. |invert_options| replace:: :meth:`invert options <pymor.operators.interfaces.OperatorInterface.invert_options>`
+.. |solver_options| replace:: :attr:`~pymor.operators.interfaces.OperatorInterface.solver_options`
 
 '''
 
