@@ -8,12 +8,10 @@
 """Simple demonstration of solving the heat equation in 2D using pyMOR's builtin discretizations.
 
 Usage:
-    parabolic.py [-h] [--help] [--fv] [--rect] [--grid=NI] DIFF NT
+    parabolic.py [-h] [--help] [--fv] [--rect] [--grid=NI] [--nt=COUNT] DIFF
 
 Arguments:
     DIFF         The diffusion constant
-
-    NT           The number of time-steps.
 
 Options:
     -h, --help   Show this message.
@@ -22,7 +20,9 @@ Options:
 
     --rect       Use RectGrid instead of TriaGrid.
 
-    --grid=NI              Use grid with 2^NI elements [default: 7].
+    --grid=NI    Use grid with 2^NI elements [default: 7].
+
+    --nt=COUNT   Number of time steps [default: 100].
 """
 
 from __future__ import absolute_import, division, print_function
@@ -44,7 +44,7 @@ from pymor.grids.tria import TriaGrid
 
 def parabolic_demo(args):
     args['DIFF'] = float(args['DIFF'])
-    args['NT'] = int(args['NT'])
+    args['--nt'] = int(args['--nt'])
     args['--grid'] = int(args['--grid'])
 
     n = 2**args['--grid']
@@ -52,12 +52,12 @@ def parabolic_demo(args):
     print('Solving on {0}'.format(grid_name))
 
     print('Setup problem ...')
-    domain = RectDomain(left=BoundaryType('neumann'), right=BoundaryType('neumann'))
+    domain = RectDomain(top=BoundaryType('neumann'), bottom=BoundaryType('neumann'))
     rhs = ConstantFunction(value=0, dim_domain=2)
     diffusion_functional = GenericParameterFunctional(mapping=lambda mu: mu['diffusion'],
                                                       parameter_type={'diffusion': 0})
-    dirichlet = GenericFunction(lambda X: np.sin(np.pi*X[..., 0]), dim_domain=2)
-    neumann = ConstantFunction(value=0, dim_domain=2)
+    dirichlet = GenericFunction(lambda X: np.cos(np.pi*X[..., 0])*np.sin(np.pi*X[..., 1]), dim_domain=2)
+    neumann = ConstantFunction(value=1, dim_domain=2)
     initial = GenericFunction(lambda X: np.cos(np.pi*X[..., 0])*np.sin(np.pi*X[..., 1]), dim_domain=2)
 
     problem = ParabolicProblem(domain=domain, rhs=rhs, diffusion_functionals=[diffusion_functional],
@@ -69,7 +69,7 @@ def parabolic_demo(args):
     else:
         grid, bi = discretize_domain_default(problem.domain, diameter=1. / n, grid_type=TriaGrid)
     discretizer = discretize_parabolic_fv if args['--fv'] else discretize_parabolic_cg
-    discretization, _ = discretizer(analytical_problem=problem, grid=grid, boundary_info=bi, nt=args['NT'])
+    discretization, _ = discretizer(analytical_problem=problem, grid=grid, boundary_info=bi, nt=args['--nt'])
 
     print('The parameter type is {}'.format(discretization.parameter_type))
 
