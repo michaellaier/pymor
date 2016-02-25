@@ -1,5 +1,5 @@
 # This file is part of the pyMOR project (http://www.pymor.org).
-# Copyright Holders: Rene Milk, Stephan Rave, Felix Schindler
+# Copyright 2013-2016 pyMOR developers and contributors. All rights reserved.
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
 
 """This module contains the implementation of pyMOR's parameter handling facilities.
@@ -235,7 +235,8 @@ class Parameter(dict):
         elif set(mu.keys()) != set(parameter_type.keys()):
             raise ValueError('Provided parameter with keys {} does not match parameter type {}.'
                              .format(mu.keys(), parameter_type))
-        for k, v in mu.iteritems():
+
+        def parse_value(k, v):
             if not isinstance(v, np.ndarray):
                 v = np.array(v)
                 try:
@@ -243,11 +244,12 @@ class Parameter(dict):
                 except ValueError:
                     raise ValueError('Shape mismatch for parameter component {}: got {}, expected {}'
                                      .format(k, v.shape, parameter_type[k]))
-                mu[k] = v
             if v.shape != parameter_type[k]:
                 raise ValueError('Shape mismatch for parameter component {}: got {}, expected {}'
                                  .format(k, v.shape, parameter_type[k]))
-        return cls(mu)
+            return v
+
+        return cls({k: parse_value(k, v) for k, v in mu.iteritems()})
 
     def allclose(self, mu):
         """Compare to |Parameters| using :meth:`~pymor.tools.floatcmp.float_cmp_all`.

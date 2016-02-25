@@ -1,5 +1,5 @@
 # This file is part of the pyMOR project (http://www.pymor.org).
-# Copyright Holders: Rene Milk, Stephan Rave, Felix Schindler
+# Copyright 2013-2016 pyMOR developers and contributors. All rights reserved.
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
 
 """ This module provides helper methods to use pyMOR in parallel with MPI.
@@ -55,20 +55,33 @@ from __future__ import absolute_import, division, print_function
 
 import sys
 
+from pymor.core.defaults import defaults
+from pymor.core.pickle import dumps, loads
+
 try:
+    import mpi4py
     from mpi4py import MPI
     HAVE_MPI = True
-
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
-    rank0 = rank == 0
     size = comm.Get_size()
-    parallel = (size > 1)
     finished = False
+    mpi4py_version = map(int, mpi4py.__version__.split('.'))
+    if mpi4py_version >= [2, 0]:
+        import pymor.core.pickle
+        MPI.pickle.PROTOCOL = pymor.core.pickle.PROTOCOL
+        MPI.pickle.loads = pymor.core.pickle.loads
+        MPI.pickle.dumps = pymor.core.pickle.dumps
 
 except ImportError:
+    mpi4py_version = None
     HAVE_MPI = False
+    rank = 0
+    size = 1
+    finished = True
 
+rank0 = rank == 0
+parallel = (size > 1)
 
 _managed_objects = {}
 _object_counter = 0
@@ -77,64 +90,130 @@ _object_counter = 0
 ################################################################################
 
 
-def event_loop():
-    """Launches an MPI-based event loop.
-
-    Events can be sent by either calling :func:`call` on
-    rank 0 to execute an arbitrary method on all ranks or
-    by calling :func:`quit` to exit the loop.
-    """
-    assert not rank0
-    while True:
-        try:
-            method, args, kwargs = comm.bcast(None)
-            if method == 'QUIT':
-                break
-            else:
-                method(*args, **kwargs)
-        except:
-            import traceback
-            print("Caught exception on MPI rank {}:".format(rank))
-            traceback.print_exception(*sys.exc_info())
+@defaults('auto_launch')
+def event_loop_settings(auto_launch=True):
+    return {'auto_launch': auto_launch}
 
 
-def call(method, *args, **kwargs):
-    """Execute method on all MPI ranks.
+if mpi4py_version >= [2, 0]:
+    def event_loop():
+        """Launches an MPI-based event loop.
 
-    Assuming :func:`event_loop` is running on all MPI ranks
-    (except rank 0), this will execute `method` on all
-    ranks (including rank 0) with sequential arguments
-    `args` and keyword arguments `kwargs`.
+        Events can be sent by either calling :func:`call` on
+        rank 0 to execute an arbitrary method on all ranks or
+        by calling :func:`quit` to exit the loop.
+        """
+        assert not rank0
+        while True:
+            try:
+                method, args, kwargs = comm.bcast(None)
+                if method == 'QUIT':
+                    break
+                else:
+                    method(*args, **kwargs)
+            except:
+                import traceback
+                print("Caught exception on MPI rank {}:".format(rank))
+                traceback.print_exception(*sys.exc_info())
 
-    Parameters
-    ----------
-    method
-        The function to execute on all ranks. Must be picklable.
-    args
-        The sequential arguments for `method`.
-    kwargs
-        The keyword arguments for `method`.
+    def call(method, *args, **kwargs):
+        """Execute method on all MPI ranks.
 
-    Returns
-    -------
-    The return value of `method` on rank 0.
-    """
-    assert rank0
-    if finished:
-        return
-    comm.bcast((method, args, kwargs), root=0)
-    return method(*args, **kwargs)
+        Assuming :func:`event_loop` is running on all MPI ranks
+        (except rank 0), this will execute `method` on all
+        ranks (including rank 0) with sequential arguments
+        `args` and keyword arguments `kwargs`.
 
+        Parameters
+        ----------
+        method
+            The function to execute on all ranks. Must be picklable.
+        args
+            The sequential arguments for `method`.
+        kwargs
+            The keyword arguments for `method`.
 
-def quit():
-    """Exit the event loop on all MPI ranks.
+        Returns
+        -------
+        The return value of `method` on rank 0.
+        """
+        assert rank0
+        if finished:
+            return
+        comm.bcast((method, args, kwargs), root=0)
+        return method(*args, **kwargs)
 
-    This will cause :func:`event_loop` to terminate on all
-    MPI ranks.
-    """
-    global finished
-    comm.bcast(('QUIT', None, None))
-    finished = True
+    def quit():
+        """Exit the event loop on all MPI ranks.
+
+        This will cause :func:`event_loop` to terminate on all
+        MPI ranks.
+        """
+        global finished
+        comm.bcast(('QUIT', None, None))
+        finished = True
+
+else:
+    # for older mpi4py versions we have to pickle manually to ensure
+    # that pymor.core.pickle is used which will correctly serialize
+    # lambdas, etc.
+
+    def event_loop():
+        """Launches an MPI-based event loop.
+
+        Events can be sent by either calling :func:`call` on
+        rank 0 to execute an arbitrary method on all ranks or
+        by calling :func:`quit` to exit the loop.
+        """
+        assert not rank0
+        while True:
+            try:
+                method, args, kwargs = loads(comm.bcast(None))
+                if method == 'QUIT':
+                    break
+                else:
+                    method(*args, **kwargs)
+            except:
+                import traceback
+                print("Caught exception on MPI rank {}:".format(rank))
+                traceback.print_exception(*sys.exc_info())
+
+    def call(method, *args, **kwargs):
+        """Execute method on all MPI ranks.
+
+        Assuming :func:`event_loop` is running on all MPI ranks
+        (except rank 0), this will execute `method` on all
+        ranks (including rank 0) with sequential arguments
+        `args` and keyword arguments `kwargs`.
+
+        Parameters
+        ----------
+        method
+            The function to execute on all ranks. Must be picklable.
+        args
+            The sequential arguments for `method`.
+        kwargs
+            The keyword arguments for `method`.
+
+        Returns
+        -------
+        The return value of `method` on rank 0.
+        """
+        assert rank0
+        if finished:
+            return
+        comm.bcast(dumps((method, args, kwargs)), root=0)
+        return method(*args, **kwargs)
+
+    def quit():
+        """Exit the event loop on all MPI ranks.
+
+        This will cause :func:`event_loop` to terminate on all
+        MPI ranks.
+        """
+        global finished
+        comm.bcast(dumps(('QUIT', None, None)))
+        finished = True
 
 
 ################################################################################
@@ -189,7 +268,7 @@ def function_call_manage(f, *args, **kwargs):
     return manage_object(function_call(f, *args, **kwargs))
 
 
-def method_call(obj_id, name, *args, **kwargs):
+def method_call(obj_id, name_, *args, **kwargs):
     """Execute a method with given arguments.
 
     Intended to be used in conjunction with :func:`call`.
@@ -201,7 +280,7 @@ def method_call(obj_id, name, *args, **kwargs):
     obj_id
         The :class:`ObjectId` of the object on which to call
         the method.
-    name
+    name_
         Name of the method to call.
     args
         Sequential arguments for the method.
@@ -209,11 +288,11 @@ def method_call(obj_id, name, *args, **kwargs):
         Keyword arguments for the method.
     """
     obj = get_object(obj_id)
-    return getattr(obj, name)(*((get_object(arg) if type(arg) is ObjectId else arg) for arg in args),
-                              **{k: (get_object(v) if type(v) is ObjectId else v) for k, v in kwargs.iteritems()})
+    return getattr(obj, name_)(*((get_object(arg) if type(arg) is ObjectId else arg) for arg in args),
+                                **{k: (get_object(v) if type(v) is ObjectId else v) for k, v in kwargs.iteritems()})
 
 
-def method_call_manage(obj_id, name, *args, **kwargs):
+def method_call_manage(obj_id, name_, *args, **kwargs):
     """Execute a method with given arguments and manage the return value.
 
     Intended to be used in conjunction with :func:`call`.
@@ -227,14 +306,14 @@ def method_call_manage(obj_id, name, *args, **kwargs):
     obj_id
         The :class:`ObjectId` of the object on which to call
         the method.
-    name
+    name_
         Name of the method to call.
     args
         Sequential arguments for the method.
     kwargs
         Keyword arguments for the method.
     """
-    return manage_object(method_call(obj_id, name, *args, **kwargs))
+    return manage_object(method_call(obj_id, name_, *args, **kwargs))
 
 
 ################################################################################

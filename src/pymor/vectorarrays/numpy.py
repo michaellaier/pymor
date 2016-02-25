@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # This file is part of the pyMOR project (http://www.pymor.org).
-# Copyright Holders: Rene Milk, Stephan Rave, Felix Schindler
+# Copyright 2013-2016 pyMOR developers and contributors. All rights reserved.
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
 
 from __future__ import absolute_import, division, print_function
@@ -79,6 +79,14 @@ class NumpyVectorArray(VectorArrayInterface):
     def data(self):
         return self._array[:self._len]
 
+    @property
+    def real(self):
+        return NumpyVectorArray(self._array[:self._len].real, copy=True)
+
+    @property
+    def imag(self):
+        return NumpyVectorArray(self._array[:self._len].imag, copy=True)
+
     def __len__(self):
         return self._len
 
@@ -127,6 +135,8 @@ class NumpyVectorArray(VectorArrayInterface):
         if o_ind is None:
             len_other = other._len
             if len_other <= self._array.shape[0] - self._len:
+                if self._array.dtype != other._array.dtype:
+                    self._array = self._array.astype(np.promote_types(self._array.dtype, other._array.dtype))
                 self._array[self._len:self._len + len_other] = other._array[:len_other]
             else:
                 self._array = np.vstack((self._array[:self._len], other._array[:len_other]))
@@ -138,6 +148,8 @@ class NumpyVectorArray(VectorArrayInterface):
             else:
                 len_other = len(o_ind)
             if len_other <= self._array.shape[0] - self._len:
+                if self._array.dtype != other._array.dtype:
+                    self._array = self._array.astype(np.promote_types(self._array.dtype, other._array.dtype))
                 other._array.take(o_ind, axis=0, out=self._array[self._len:self._len + len_other])
             else:
                 self._array = np.append(self._array[:self._len], other._array[o_ind], axis=0)
@@ -199,6 +211,8 @@ class NumpyVectorArray(VectorArrayInterface):
         else:
             len_ind = self.len_ind(ind)
             other_array = np.array(self._array) if other is self else other._array
+            if self._array.dtype != other._array.dtype:
+                self._array = self._array.astype(np.promote_types(self._array.dtype, other._array.dtype))
             if o_ind is None:
                 assert len_ind == other._len
                 self._array[ind] = other_array[:other._len]
@@ -224,6 +238,12 @@ class NumpyVectorArray(VectorArrayInterface):
 
         if isinstance(alpha, np.ndarray) and not isinstance(ind, Number):
             alpha = alpha[:, np.newaxis]
+
+        alpha_type = type(alpha)
+        alpha_dtype = alpha.dtype if alpha_type is np.ndarray else alpha_type
+        if self._array.dtype != alpha_dtype:
+            self._array = self._array.astype(np.promote_types(self._array.dtype, alpha_dtype))
+
         if ind is None:
             self._array[:self._len] *= alpha
         else:
@@ -250,6 +270,13 @@ class NumpyVectorArray(VectorArrayInterface):
             return
 
         B = x._array[:x._len] if x_ind is None else x._array[x_ind]
+
+        alpha_type = type(alpha)
+        alpha_dtype = alpha.dtype if alpha_type is np.ndarray else alpha_type
+        if self._array.dtype != alpha_dtype or self._array.dtype != B.dtype:
+            dtype = np.promote_types(self._array.dtype, alpha_dtype)
+            dtype = np.promote_types(dtype, B.dtype)
+            self._array = self._array.astype(dtype)
 
         if np.all(alpha == 1):
             if ind is None:
@@ -291,7 +318,10 @@ class NumpyVectorArray(VectorArrayInterface):
         B = other._array[:other._len] if o_ind is None else \
             other._array[o_ind] if hasattr(o_ind, '__len__') else other._array[o_ind:o_ind + 1]
 
-        return A.dot(B.T)
+        if B.dtype in _complex_dtypes:
+            return A.dot(B.conj().T)
+        else:
+            return A.dot(B.T)
 
     def pairwise_dot(self, other, ind=None, o_ind=None):
         assert self.check_ind(ind)
@@ -310,7 +340,10 @@ class NumpyVectorArray(VectorArrayInterface):
         B = other._array[:other._len] if o_ind is None else \
             other._array[o_ind] if hasattr(o_ind, '__len__') else other._array[o_ind:o_ind + 1]
 
-        return np.sum(A * B, axis=1)
+        if B.dtype in _complex_dtypes:
+            return np.sum(A * B.conj(), axis=1)
+        else:
+            return np.sum(A * B, axis=1)
 
     def lincomb(self, coefficients, ind=None):
         assert self.check_ind(ind)
@@ -342,7 +375,7 @@ class NumpyVectorArray(VectorArrayInterface):
         A = self._array[:self._len] if ind is None else \
             self._array[ind] if hasattr(ind, '__len__') else self._array[ind:ind + 1]
 
-        return np.sum(np.abs(A), axis=1)
+        return np.linalg.norm(A, ord=1, axis=1)
 
     def l2_norm(self, ind=None):
         assert self.check_ind(ind)
@@ -353,7 +386,7 @@ class NumpyVectorArray(VectorArrayInterface):
         A = self._array[:self._len] if ind is None else \
             self._array[ind] if hasattr(ind, '__len__') else self._array[ind:ind + 1]
 
-        return np.sum(np.power(A, 2), axis=1)**(1/2)
+        return np.linalg.norm(A, axis=1)
 
     def components(self, component_indices, ind=None):
         assert self.check_ind(ind)
@@ -420,3 +453,6 @@ class NumpyVectorArray(VectorArrayInterface):
 def NumpyVectorSpace(dim):
     """Shorthand for |VectorSpace| `(NumpyVectorArray, dim)`."""
     return VectorSpace(NumpyVectorArray, dim)
+
+
+_complex_dtypes = (np.complex64, np.complex128)

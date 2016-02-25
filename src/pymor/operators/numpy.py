@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 # This file is part of the pyMOR project (http://www.pymor.org).
-# Copyright Holders: Rene Milk, Stephan Rave, Felix Schindler
+# Copyright 2013-2016 pyMOR developers and contributors. All rights reserved.
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
-#
-# Contributors: Michael Laier <m_laie01@uni-muenster.de>
 
 """This module provides the following |NumPy| based |Operators|:
 
@@ -312,14 +310,25 @@ class NumpyMatrixOperator(NumpyMatrixBasedOperator):
         if not all(isinstance(op, (NumpyMatrixOperator, ZeroOperator, IdentityOperator)) for op in operators):
             return None
 
+        common_mat_dtype = reduce(np.promote_types,
+                                  (op._matrix.dtype for op in operators if hasattr(op, '_matrix')))
+        common_coef_dtype = reduce(np.promote_types, (type(c.real if c.imag == 0 else c) for c in coefficients))
+        common_dtype = np.promote_types(common_mat_dtype, common_coef_dtype)
+
         if coefficients[0] == 1:
-            matrix = operators[0]._matrix.copy()
+            matrix = operators[0]._matrix.astype(common_dtype)
         else:
-            matrix = operators[0]._matrix * coefficients[0]
+            if coefficients[0].imag == 0:
+                matrix = operators[0]._matrix * coefficients[0].real
+            else:
+                matrix = operators[0]._matrix * coefficients[0]
+            if matrix.dtype != common_dtype:
+                matrix = matrix.astype(common_dtype)
+
         for op, c in izip(operators[1:], coefficients[1:]):
-            if isinstance(op, ZeroOperator):
+            if type(op) is ZeroOperator:
                 continue
-            elif isinstance(op, IdentityOperator):
+            elif type(op) is IdentityOperator:
                 if operators[0].sparse:
                     try:
                         matrix += (scipy.sparse.eye(matrix.shape[0]) * c)
@@ -337,6 +346,11 @@ class NumpyMatrixOperator(NumpyMatrixBasedOperator):
                     matrix -= op._matrix
                 except NotImplementedError:
                     matrix = matrix - op._matrix
+            elif c.imag == 0:
+                try:
+                    matrix += (op._matrix * c.real)
+                except NotImplementedError:
+                    matrix = matrix + (op._matrix * c.real)
             else:
                 try:
                     matrix += (op._matrix * c)
@@ -430,7 +444,7 @@ def dense_options(default_solver='solve',
           'pyamg_sa_accel', 'pyamg_sa_tol', 'pyamg_sa_maxiter',
           sid_ignore=('least_squares_lsmr_show', 'least_squares_lsqr_show', 'pyamg_verb'))
 def sparse_options(default_solver='spsolve',
-                   default_least_squares_solver='least_squares_lsmr',
+                   default_least_squares_solver='least_squares_lsmr' if HAVE_SCIPY_LSMR else 'least_squares_generic_lsmr',
                    bicgstab_tol=1e-15,
                    bicgstab_maxiter=None,
                    spilu_drop_tol=1e-4,
@@ -777,7 +791,7 @@ def _apply_inverse(matrix, V, options=None):
         options = default_options[user_options['type']]
         options.update(user_options)
 
-    R = np.empty((len(V), matrix.shape[1]))
+    R = np.empty((len(V), matrix.shape[1]), dtype=np.promote_types(matrix.dtype, V.dtype))
 
     if options['type'] == 'solve':
         for i, VV in enumerate(V):
@@ -814,7 +828,7 @@ def _apply_inverse(matrix, V, options=None):
                                          format(info))
     elif options['type'] == 'spsolve':
         try:
-            if scipy.version.version >= '0.14':
+            if map(int, scipy.version.version.split('.')) >= [0, 14, 0]:
                 if hasattr(matrix, 'factorization'):
                     R = matrix.factorization.solve(V.T).T
                 elif options['keep_factorization']:
