@@ -1,8 +1,6 @@
 # This file is part of the pyMOR project (http://www.pymor.org).
-# Copyright Holders: Rene Milk, Stephan Rave, Felix Schindler
+# Copyright 2013-2016 pyMOR developers and contributors. All rights reserved.
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
-#
-# Contributors: Michael Laier <m_laie01@uni-muenster.de>
 
 from __future__ import absolute_import, division, print_function
 
@@ -13,9 +11,232 @@ import numpy as np
 from pymor.core.interfaces import ImmutableInterface
 from pymor.operators.constructions import LincombOperator, induced_norm
 from pymor.reductors.basic import reduce_generic_rb
+from pymor.reductors.residual import reduce_instationary_residual
 from pymor.operators.numpy import NumpyMatrixOperator
 from pymor.vectorarrays.numpy import NumpyVectorArray
 from pymor.algorithms.timestepping import ImplicitEulerTimeStepper
+
+
+def reduce_parabolic_l2_estimate(discretization, RB, disable_caching=True, extends=None):
+    """Reductor for |StationaryDiscretizations| with coercive operator.
+
+    This reductor uses :meth:`~pymor.reductors.basic.reduce_generic_rb` for the actual
+    RB-projection. The only addition is an error estimator. The estimator evaluates the
+    dual norm of the residual with respect to a given inner product. We use
+    :func:`~pymor.reductors.residual.reduce_residual` for improved numerical stability.
+    (See "A. Buhr, C. Engwer, M. Ohlberger, S. Rave, A Numerically Stable A Posteriori
+    Error Estimator for Reduced Basis Approximations of Elliptic Equations,
+    Proceedings of the 11th World Congress on Computational Mechanics, 2014.")
+
+    Parameters
+    ----------
+    discretization
+        The |Discretization| which is to be reduced.
+    RB
+        |VectorArray| containing the reduced basis on which to project.
+    error_product
+        Scalar product |Operator| used to calculate Riesz representative of the
+        residual. If `None`, the Euclidean product is used.
+    coercivity_estimator
+        `None` or a |Parameterfunctional| returning a lower bound for the coercivity
+        constant of the given problem. Note that the computed error estimate is only
+        guaranteed to be an upper bound for the error when an appropriate coercivity
+        estimate is specified.
+    disable_caching
+        If `True`, caching of solutions is disabled for the reduced |Discretization|.
+    extends
+        Set by :meth:`~pymor.algorithms.greedy.greedy` to the result of the
+        last reduction in case the basis extension was `hierarchic`. Used to prevent
+        re-computation of residual range basis vectors already obtained from previous
+        reductions.
+
+    Returns
+    -------
+    rd
+        The reduced |Discretization|.
+    rc
+        The reconstructor providing a `reconstruct(U)` method which reconstructs
+        high-dimensional solutions from solutions `U` of the reduced |Discretization|.
+    reduction_data
+        Additional data produced by the reduction process. (Compare the `extends`
+        parameter.)
+    """
+
+    assert extends is None or len(extends) == 3
+    assert isinstance(discretization.time_stepper, ImplicitEulerTimeStepper)
+
+    old_residual_data = extends[2].pop('residual') if extends else None
+
+    rd, rc, data = reduce_generic_rb(discretization, RB, disable_caching=disable_caching, extends=extends)
+
+    dt = discretization.T / discretization.time_stepper.nt
+
+    residual, residual_reconstructor, residual_data = reduce_instationary_residual(discretization.operator,
+                                                                                   discretization.mass,
+                                                                                   dt,
+                                                                                   discretization.rhs,
+                                                                                   RB,
+                                                                                   product=discretization.mass,
+                                                                                   extends=old_residual_data)
+
+    estimator = ReduceParabolicL2Estimator(residual, residual_data.get('residual_range_dims', None))
+
+    rd = rd.with_(estimator=estimator)
+
+    data.update(residual=(residual, residual_reconstructor, residual_data))
+
+    return rd, rc, data
+
+
+class ReduceParabolicL2Estimator(ImmutableInterface):
+    """Instatiated by :meth:`reduce_parabolic_l2_estimate`.
+
+    Not to be used directly.
+    """
+
+    def __init__(self, residual, residual_range_dims):
+        self.residual = residual
+        self.residual_range_dims = residual_range_dims
+
+    def estimate(self, U, mu, discretization, k=None):
+        est = [np.array([0.])]
+        max_k = len(U) - 1 if k is None else k
+        for i in xrange(max_k):
+            est.append(est[i] + self.residual.apply(U, ind=i+1, mu=mu).l2_norm())
+
+        est = np.array(est)
+        dt = discretization.T / discretization.time_stepper.nt
+        est *= dt
+
+        return est[-1]
+
+    def restricted_to_subbasis(self, dim, discretization):
+        if self.residual_range_dims:
+            residual_range_dims = self.residual_range_dims[:dim + 1]
+            residual = self.residual.projected_to_subbasis(residual_range_dims[-1], dim)
+            return ReduceParabolicL2Estimator(residual, residual_range_dims)
+        else:
+            self.logger.warn('Cannot efficiently reduce to subbasis')
+            return ReduceParabolicL2Estimator(self.residual.projected_to_subbasis(None, dim), None)
+
+
+def reduce_parabolic_energy_estimate(discretization, RB, error_product=None, coercivity_estimator=None, gamma=0.,
+                                     disable_caching=True, extends=None):
+    """Reductor for |StationaryDiscretizations| with coercive operator.
+
+    This reductor uses :meth:`~pymor.reductors.basic.reduce_generic_rb` for the actual
+    RB-projection. The only addition is an error estimator. The estimator evaluates the
+    dual norm of the residual with respect to a given inner product. We use
+    :func:`~pymor.reductors.residual.reduce_residual` for improved numerical stability.
+    (See "A. Buhr, C. Engwer, M. Ohlberger, S. Rave, A Numerically Stable A Posteriori
+    Error Estimator for Reduced Basis Approximations of Elliptic Equations,
+    Proceedings of the 11th World Congress on Computational Mechanics, 2014.")
+
+    Parameters
+    ----------
+    discretization
+        The |Discretization| which is to be reduced.
+    RB
+        |VectorArray| containing the reduced basis on which to project.
+    error_product
+        Scalar product |Operator| used to calculate Riesz representative of the
+        residual. If `None`, the Euclidean product is used.
+    coercivity_estimator
+        `None` or a |Parameterfunctional| returning a lower bound for the coercivity
+        constant of the given problem. Note that the computed error estimate is only
+        guaranteed to be an upper bound for the error when an appropriate coercivity
+        estimate is specified.
+    disable_caching
+        If `True`, caching of solutions is disabled for the reduced |Discretization|.
+    extends
+        Set by :meth:`~pymor.algorithms.greedy.greedy` to the result of the
+        last reduction in case the basis extension was `hierarchic`. Used to prevent
+        re-computation of residual range basis vectors already obtained from previous
+        reductions.
+
+    Returns
+    -------
+    rd
+        The reduced |Discretization|.
+    rc
+        The reconstructor providing a `reconstruct(U)` method which reconstructs
+        high-dimensional solutions from solutions `U` of the reduced |Discretization|.
+    reduction_data
+        Additional data produced by the reduction process. (Compare the `extends`
+        parameter.)
+    """
+
+    assert extends is None or len(extends) == 3
+    assert isinstance(discretization.time_stepper, ImplicitEulerTimeStepper)
+    assert gamma is None or (0 <= gamma < 2)
+
+    old_residual_data = extends[2].pop('residual') if extends else None
+
+    rd, rc, data = reduce_generic_rb(discretization, RB, disable_caching=disable_caching, extends=extends)
+
+    dt = discretization.T / discretization.time_stepper.nt
+
+    residual, residual_reconstructor, residual_data = reduce_instationary_residual(discretization.operator,
+                                                                                   discretization.mass,
+                                                                                   dt,
+                                                                                   discretization.rhs,
+                                                                                   RB,
+                                                                                   product=error_product,
+                                                                                   extends=old_residual_data)
+
+    estimator = ReduceParabolicEnergyEstimator(residual, residual_data.get('residual_range_dims', None),
+                                               coercivity_estimator, gamma)
+
+    rd = rd.with_(estimator=estimator)
+
+    data.update(residual=(residual, residual_reconstructor, residual_data))
+
+    return rd, rc, data
+
+
+class ReduceParabolicEnergyEstimator(ImmutableInterface):
+    """Instatiated by :meth:`reduce_coercive`.
+
+    Not to be used directly.
+    """
+
+    def __init__(self, residual, residual_range_dims, coercivity_estimator, gamma):
+        self.residual = residual
+        self.residual_range_dims = residual_range_dims
+        self.coercivity_estimator = coercivity_estimator
+        self.gamma = gamma
+
+    def estimate(self, U, mu, discretization, k=None):
+        est = [np.array([0.])]
+        max_k = len(U) - 1 if k is None else k
+        for i in xrange(max_k):
+            est.append(est[i] + self.residual.apply(U, ind=i+1, mu=mu).l2_norm()**2)
+
+        est = np.array(est)
+        dt = discretization.T / discretization.time_stepper.nt
+        est *= dt
+
+        est /= 2. - self.gamma
+
+        if self.coercivity_estimator:
+            est /= self.coercivity_estimator(mu)
+
+        return np.sqrt(est[-1])
+
+        est = self.residual.apply(U, mu=mu).l2_norm()
+        if self.coercivity_estimator:
+            est /= self.coercivity_estimator(mu)
+        return est
+
+    def restricted_to_subbasis(self, dim, discretization):
+        if self.residual_range_dims:
+            residual_range_dims = self.residual_range_dims[:dim + 1]
+            residual = self.residual.projected_to_subbasis(residual_range_dims[-1], dim)
+            return ReduceParabolicEnergyEstimator(residual, residual_range_dims, self.coercivity_estimator, self.gamma)
+        else:
+            self.logger.warn('Cannot efficiently reduce to subbasis')
+            return ReduceParabolicEnergyEstimator(self.residual.projected_to_subbasis(None, dim), None,
+                                                  self.coercivity_estimator, self.gamma)
 
 
 def collect_residual_data(discretization, RB, error_product=None, extends=None):
@@ -73,8 +294,8 @@ def collect_residual_data(discretization, RB, error_product=None, extends=None):
         for i in xrange(len(RB)):
             append_vector(-d.operator.apply(RB, ind=i), R_Os[0], RR_Os[0])
     else:
-        R_Os = [space.empty(reserve=len(RB)) for _ in xrange(len(d.operator.operators))]
-        RR_Os = [space.empty(reserve=len(RB)) for _ in xrange(len(d.operator.operators))]
+        R_Os = [space.empty(reserve=len(RB)) for _ in xrange(len(discretization.operator.operators))]
+        RR_Os = [space.empty(reserve=len(RB)) for _ in xrange(len(discretization.operator.operators))]
         if old_RB_size > 0:
             for op, R_O, RR_O, old_R_O, old_RR_O in izip(discretization.operator.operators, R_Os, RR_Os,
                                                          old_data['R_Os'], old_data['RR_Os']):
@@ -110,7 +331,114 @@ def compute_estimator_matrix(R_Ms, RR_Ms, R_R, RR_R, R_Os, RR_Os, dt):
     return NumpyMatrixOperator(estimator_matrix)
 
 
-def reduce_instationary_energy_estimate(discretization, RB, error_product=None, coercivity_estimator=None, gamma=0.,
+def reduce_parabolic_l2_estimate_simple(discretization, RB, disable_caching=True, extends=None):
+    """Reductor for linear |InstationaryDiscretizations| with affinely decomposed operator and rhs.
+
+    This reductor uses :meth:`~pymor.reductors.basic.reduce_generic_rb` for the actual
+    RB-projection. The only addition is an error estimator. The estimator evaluates the
+    norm of the residual with respect to a given inner product.
+
+    Parameters
+    ----------
+    discretization
+        The |Discretization| which is to be reduced.
+    RB
+        |VectorArray| containing the reduced basis on which to project.
+    disable_caching
+        If `True`, caching of solutions is disabled for the reduced |Discretization|.
+    extends
+        Set by :meth:`~pymor.algorithms.greedy.greedy` to the result of the
+        last reduction in case the basis extension was `hierarchic`. Used to prevent
+        re-computation of Riesz representatives already obtained from previous
+        reductions.
+
+    Returns
+    -------
+    rd
+        The reduced |Discretization|.
+    rc
+        The reconstructor providing a `reconstruct(U)` method which reconstructs
+        high-dimensional solutions from solutions `U` of the reduced |Discretization|.
+    reduction_data
+        Additional data produced by the reduction process. In this case the computed
+        Riesz representatives. (Compare the `extends` parameter.)
+    """
+
+    assert discretization.linear
+    assert isinstance(discretization.operator, LincombOperator)
+    assert all(not op.parametric for op in discretization.operator.operators)
+    if discretization.rhs.parametric:
+        assert isinstance(discretization.rhs, LincombOperator)
+        assert all(not op.parametric for op in discretization.rhs.operators)
+    assert extends is None or len(extends) == 3
+    assert isinstance(discretization.time_stepper, ImplicitEulerTimeStepper)
+
+    rd, rc, data = reduce_generic_rb(discretization, RB, disable_caching=disable_caching, extends=extends)
+    R_Ms, RR_Ms, R_R, RR_R, R_Os, RR_Os = collect_residual_data(discretization, RB, error_product=discretization.mass,
+                                                                extends=extends)
+
+    dt = discretization.T / discretization.time_stepper.nt
+    estimator_matrix = compute_estimator_matrix(R_Ms, RR_Ms, R_R, RR_R, R_Os, RR_Os, dt)
+    estimator = ReduceParabolicSimpleL2Estimator(estimator_matrix)
+
+    rd = rd.with_(estimator=estimator)
+    data.update(R_Ms=R_Ms, RR_Ms=RR_Ms, R_R=R_R, RR_R=RR_R, R_Os=R_Os, RR_Os=RR_Os)
+
+    return rd, rc, data
+
+
+class ReduceParabolicSimpleL2Estimator(ImmutableInterface):
+    """Instatiated by :meth:`reduce_instationary_l2_estimate`.
+
+    Not to be used directly.
+    """
+
+    def __init__(self, estimator_matrix):
+        self.estimator_matrix = estimator_matrix
+        self.norm = induced_norm(estimator_matrix)
+
+    def estimate(self, U, mu, discretization, k=None):
+        d = discretization
+        CM = np.ones(1)
+        if not d.rhs.parametric:
+            CR = np.ones(1)
+        else:
+            CR = np.array(d.rhs.evaluate_coefficients(mu))
+
+        if not d.operator.parametric:
+            CO = np.ones(1)
+        else:
+            CO = np.array(d.operator.evaluate_coefficients(mu))
+
+        est = [np.array([0.])]
+        max_k = len(U) - 1 if k is None else k
+        for i in xrange(max_k):
+            C = np.hstack((np.dot(CM[..., np.newaxis], (U.data[i + 1] - U.data[i])[np.newaxis, ...]).ravel(), CR,
+                           np.dot(CO[..., np.newaxis], U.data[i + 1][np.newaxis, ...]).ravel()))
+
+            est.append(est[i] + self.norm(NumpyVectorArray(C)))
+
+        est = np.array(est)
+        dt = d.T / discretization.time_stepper.nt
+        est *= dt
+
+        return est[-1]
+
+    def restricted_to_subbasis(self, dim, discretization):
+        d = discretization
+        cr = 1 if not d.rhs.parametric else len(d.rhs.operators)
+        co = 1 if not d.operator.parametric else len(d.operator.operators)
+        old_dim = d.operator.source.dim
+
+        indices = np.concatenate((np.arange(dim),
+                                  np.arange(cr) + old_dim,
+                                  ((np.arange(co)*old_dim)[..., np.newaxis] + np.arange(dim)).ravel() + old_dim + cr))
+        matrix = self.estimator_matrix._matrix[indices, :][:, indices]
+
+        return ReduceParabolicSimpleL2Estimator(NumpyMatrixOperator(matrix))
+
+
+def reduce_parabolic_energy_estimate_simple(discretization, RB, error_product=None, coercivity_estimator=None, gamma=0.,
                                         disable_caching=True, extends=None):
     """Reductor for linear |InstationaryDiscretizations| with affinely decomposed operator and rhs.
 
@@ -171,7 +499,7 @@ def reduce_instationary_energy_estimate(discretization, RB, error_product=None, 
 
     dt = discretization.T / discretization.time_stepper.nt
     estimator_matrix = compute_estimator_matrix(R_Ms, RR_Ms, R_R, RR_R, R_Os, RR_Os, dt)
-    estimator = InstationaryReducedEnergyEstimator(estimator_matrix, coercivity_estimator, gamma)
+    estimator = ReduceParabolicSimpleEnergyEstimator(estimator_matrix, coercivity_estimator, gamma)
 
     rd = rd.with_(estimator=estimator)
     data.update(R_Ms=R_Ms, RR_Ms=RR_Ms, R_R=R_R, RR_R=RR_R, R_Os=R_Os, RR_Os=RR_Os)
@@ -179,120 +507,13 @@ def reduce_instationary_energy_estimate(discretization, RB, error_product=None, 
     return rd, rc, data
 
 
-def reduce_instationary_l2_estimate(discretization, RB, disable_caching=True, extends=None):
-    """Reductor for linear |InstationaryDiscretizations| with affinely decomposed operator and rhs.
-
-    This reductor uses :meth:`~pymor.reductors.basic.reduce_generic_rb` for the actual
-    RB-projection. The only addition is an error estimator. The estimator evaluates the
-    norm of the residual with respect to a given inner product.
-
-    Parameters
-    ----------
-    discretization
-        The |Discretization| which is to be reduced.
-    RB
-        |VectorArray| containing the reduced basis on which to project.
-    disable_caching
-        If `True`, caching of solutions is disabled for the reduced |Discretization|.
-    extends
-        Set by :meth:`~pymor.algorithms.greedy.greedy` to the result of the
-        last reduction in case the basis extension was `hierarchic`. Used to prevent
-        re-computation of Riesz representatives already obtained from previous
-        reductions.
-
-    Returns
-    -------
-    rd
-        The reduced |Discretization|.
-    rc
-        The reconstructor providing a `reconstruct(U)` method which reconstructs
-        high-dimensional solutions from solutions `U` of the reduced |Discretization|.
-    reduction_data
-        Additional data produced by the reduction process. In this case the computed
-        Riesz representatives. (Compare the `extends` parameter.)
-    """
-
-    assert discretization.linear
-    assert isinstance(discretization.operator, LincombOperator)
-    assert all(not op.parametric for op in discretization.operator.operators)
-    if discretization.rhs.parametric:
-        assert isinstance(discretization.rhs, LincombOperator)
-        assert all(not op.parametric for op in discretization.rhs.operators)
-    assert extends is None or len(extends) == 3
-    assert isinstance(discretization.time_stepper, ImplicitEulerTimeStepper)
-
-    rd, rc, data = reduce_generic_rb(discretization, RB, disable_caching=disable_caching, extends=extends)
-    R_Ms, RR_Ms, R_R, RR_R, R_Os, RR_Os = collect_residual_data(discretization, RB, error_product=discretization.mass,
-                                                                extends=extends)
-
-    dt = discretization.T / discretization.time_stepper.nt
-    estimator_matrix = compute_estimator_matrix(R_Ms, RR_Ms, R_R, RR_R, R_Os, RR_Os, dt)
-    estimator = InstationaryReducedL2Estimator(estimator_matrix)
-
-    rd = rd.with_(estimator=estimator)
-    data.update(R_Ms=R_Ms, RR_Ms=RR_Ms, R_R=R_R, RR_R=RR_R, R_Os=R_Os, RR_Os=RR_Os)
-
-    return rd, rc, data
-
-
-class InstationaryReducedL2Estimator(ImmutableInterface):
-    """Instatiated by :meth:`reduce_instationary_l2_estimate`.
-
-    Not to be used directly.
-    """
-
-    def __init__(self, estimator_matrix):
-        self.estimator_matrix = estimator_matrix
-        self.norm = induced_norm(estimator_matrix)
-
-    def estimate(self, U, mu, discretization, k=None):
-        d = discretization
-        CM = np.ones(1)
-        if not d.rhs.parametric:
-            CR = np.ones(1)
-        else:
-            CR = np.array(d.rhs.evaluate_coefficients(mu))
-
-        if not d.operator.parametric:
-            CO = np.ones(1)
-        else:
-            CO = np.array(d.operator.evaluate_coefficients(mu))
-
-        est = [np.array([0.])]
-        max_k = len(U) - 1 if k is None else k
-        for i in xrange(max_k):
-            C = np.hstack((np.dot(CM[..., np.newaxis], (U.data[i + 1] - U.data[i])[np.newaxis, ...]).ravel(), CR,
-                           np.dot(CO[..., np.newaxis], U.data[i + 1][np.newaxis, ...]).ravel()))
-
-            est.append(est[i] + self.norm(NumpyVectorArray(C)))
-
-        est = np.array(est)
-        dt = d.T / discretization.time_stepper.nt
-        est *= dt
-
-        return est[-1]
-
-    def restricted_to_subbasis(self, dim, discretization):
-        d = discretization
-        cr = 1 if not d.rhs.parametric else len(d.rhs.operators)
-        co = 1 if not d.operator.parametric else len(d.operator.operators)
-        old_dim = d.operator.source.dim
-
-        indices = np.concatenate((np.arange(dim),
-                                  np.arange(cr) + old_dim,
-                                  ((np.arange(co)*old_dim)[..., np.newaxis] + np.arange(dim)).ravel() + old_dim + cr))
-        matrix = self.estimator_matrix._matrix[indices, :][:, indices]
-
-        return InstationaryReducedL2Estimator(NumpyMatrixOperator(matrix))
-
-
-class InstationaryReducedEnergyEstimator(ImmutableInterface):
+class ReduceParabolicSimpleEnergyEstimator(ImmutableInterface):
     """Instatiated by :meth:`reduce_instationary_energy_estimate`.
 
     Not to be used directly.
     """
 
-    def __init__(self, estimator_matrix, coercivity_estimator, gamma=1.):
+    def __init__(self, estimator_matrix, coercivity_estimator, gamma):
         self.estimator_matrix = estimator_matrix
         self.coercivity_estimator = coercivity_estimator
         self.norm = induced_norm(estimator_matrix)
@@ -342,5 +563,5 @@ class InstationaryReducedEnergyEstimator(ImmutableInterface):
                                   ((np.arange(co)*old_dim)[..., np.newaxis] + np.arange(dim)).ravel() + old_dim + cr))
         matrix = self.estimator_matrix._matrix[indices, :][:, indices]
 
-        return InstationaryReducedEnergyEstimator(NumpyMatrixOperator(matrix), self.coercivity_estimator,
+        return ReduceParabolicSimpleEnergyEstimator(NumpyMatrixOperator(matrix), self.coercivity_estimator,
                                                               self.gamma)
