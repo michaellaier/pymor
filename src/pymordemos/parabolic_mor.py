@@ -31,6 +31,7 @@ Arguments:
 from __future__ import division  # ensure that 1 / 2 is 0.5 and not 0
 from pymor.basic import *        # most common pyMOR functions and classes
 from pymor.analyticalproblems.parabolic import ParabolicProblem
+from pymor.algorithms.timestepping import ImplicitEulerTimeStepper
 from pymor.discretizers.parabolic import discretize_parabolic_cg
 from pymor.reductors.parabolic import reduce_parabolic_l2_estimate, reduce_parabolic_l2_estimate_simple, \
     reduce_parabolic_energy_estimate, reduce_parabolic_energy_estimate_simple
@@ -39,10 +40,8 @@ from functools import partial    # fix parameters of given function
 
 
 # parameters for high-dimensional models
-XBLOCKS = 2
-YBLOCKS = 2
 GRID_INTERVALS = 100
-FENICS_ORDER = 2
+FENICS_ORDER = 1
 
 
 ####################################################################################################
@@ -54,16 +53,16 @@ def discretize_pymor():
 
     # setup analytical problem
     domain = RectDomain(top=BoundaryType('neumann'), bottom=BoundaryType('neumann'))
-    rhs = ConstantFunction(value=0, dim_domain=2)
+    rhs = ConstantFunction(value=0., dim_domain=2)
     diffusion_functional = GenericParameterFunctional(mapping=lambda mu: mu['diffusion'],
                                                       parameter_type={'diffusion': 0})
-    dirichlet = GenericFunction(lambda X: np.cos(np.pi*X[..., 0])*np.sin(np.pi*X[..., 1]), dim_domain=2)
-    neumann = ConstantFunction(value=1, dim_domain=2)
+    dirichlet = ConstantFunction(value=0., dim_domain=2)
+    neumann = ConstantFunction(value=-1., dim_domain=2)
     initial = GenericFunction(lambda X: np.cos(np.pi*X[..., 0])*np.sin(np.pi*X[..., 1]), dim_domain=2)
 
     problem = ParabolicProblem(domain=domain, rhs=rhs, diffusion_functionals=[diffusion_functional],
                                dirichlet_data=dirichlet, neumann_data=neumann, initial_data=initial,
-                               parameter_space=CubicParameterSpace({'diffusion': 0}, minimum=0.1, maximum=1))
+                               parameter_space=CubicParameterSpace({'diffusion': 0}, minimum=0.1, maximum=1.))
 
     # discretize using continuous finite elements
     grid, bi = discretize_domain_default(problem.domain, diameter=1. / GRID_INTERVALS, grid_type=TriaGrid)
@@ -94,36 +93,27 @@ def _discretize_fenics():
     u = df.TrialFunction(V)
     v = df.TestFunction(V)
 
-    diffusion = df.Expression('(lower0 <= x[0]) * (open0 ? (x[0] < upper0) : (x[0] <= upper0)) *' +
-                              '(lower1 <= x[1]) * (open1 ? (x[1] < upper1) : (x[1] <= upper1))',
-                              lower0=0., upper0=0., open0=0,
-                              lower1=0., upper1=0., open1=0,
-                              element=df.FunctionSpace(mesh, 'DG', 0).ufl_element())
-
-    def assemble_matrix(x, y, nx, ny):
-        diffusion.user_parameters['lower0'] = x/nx
-        diffusion.user_parameters['lower1'] = y/ny
-        diffusion.user_parameters['upper0'] = (x + 1)/nx
-        diffusion.user_parameters['upper1'] = (y + 1)/ny
-        diffusion.user_parameters['open0'] = (x + 1 == nx)
-        diffusion.user_parameters['open1'] = (y + 1 == ny)
-        return df.assemble(df.inner(diffusion * df.nabla_grad(u), df.nabla_grad(v)) * df.dx)
-
-    mats = [assemble_matrix(x, y, XBLOCKS, YBLOCKS)
-            for x in range(XBLOCKS) for y in range(YBLOCKS)]
-    mat0 = mats[0].copy()
-    mat0.zero()
+    l2_mat = df.assemble(df.inner(u, v) * df.dx)
+    l2_0_mat = l2_mat.copy()
     h1_mat = df.assemble(df.inner(df.nabla_grad(u), df.nabla_grad(v)) * df.dx)
+    h1_0_mat = h1_mat.copy()
+    mat0 = h1_mat.copy()
+    mat0.zero()
 
-    f = df.Constant(1.) * v * df.dx
+    f = df.Constant(0.) * v * df.dx + df.Constant(1.) * v * df.ds
     F = df.assemble(f)
 
-    bc = df.DirichletBC(V, 0., df.DomainBoundary())
-    for m in mats:
-        bc.zero(m)
-    bc.apply(mat0)
-    bc.apply(h1_mat)
-    bc.apply(F)
+    def dirichlet_boundary(x, on_boundary):
+        tol = 1e-14
+        return on_boundary and (abs(x[0]) < tol or abs(x[0] - 1) < tol)
+
+    bc_dirichlet = df.DirichletBC(V, df.Constant(0.), dirichlet_boundary)
+    bc_dirichlet.apply(l2_0_mat)
+    bc_dirichlet.apply(h1_0_mat)
+    bc_dirichlet.apply(mat0)
+    bc_dirichlet.apply(F)
+
+    initial = df.project(df.Expression('cos(pi*x[0]) * sin(pi*x[1])'), V).vector()
 
     # wrap everything as a pyMOR discretization
     ###########################################
@@ -133,24 +123,28 @@ def _discretize_fenics():
     from pymor.operators.fenics import FenicsMatrixOperator
     from pymor.vectorarrays.fenics import FenicsVector
 
-    # define parameter functionals (same as in pymor.analyticalproblems.thermalblock)
-    parameter_functionals = [ProjectionParameterFunctional(component_name='diffusion',
-                                                           component_shape=(YBLOCKS, XBLOCKS),
-                                                           coordinates=(YBLOCKS - y - 1, x))
-                             for x in range(XBLOCKS) for y in range(YBLOCKS)]
+    parameter_functional = GenericParameterFunctional(mapping=lambda mu: mu['diffusion'],
+                                                      parameter_type={'diffusion': 0})
 
     # wrap operators
-    ops = [FenicsMatrixOperator(mat0, V, V)] + [FenicsMatrixOperator(m, V, V) for m in mats]
-    op = LincombOperator(ops, [1.] + parameter_functionals)
+    initial_data = ListVectorArray([FenicsVector(initial, V)])
+    op = LincombOperator([FenicsMatrixOperator(mat0, V, V), FenicsMatrixOperator(h1_0_mat, V, V)],
+                         [1., parameter_functional])
     rhs = VectorFunctional(ListVectorArray([FenicsVector(F, V)]))
-    h1_product = FenicsMatrixOperator(h1_mat, V, V, name='h1_0_semi')
+    l2_product = FenicsMatrixOperator(l2_mat, V, V, name='l2')
+    l2_0_product = FenicsMatrixOperator(l2_0_mat, V, V, name='l2_0')
+    h1_product = FenicsMatrixOperator(h1_mat, V, V, name='h1')
+    h1_0_product = FenicsMatrixOperator(h1_0_mat, V, V, name='h1_0_semi')
 
     # build discretization
+    time_stepper = ImplicitEulerTimeStepper(nt=100)
     visualizer = FenicsVisualizer(V)
     parameter_space = CubicParameterSpace(op.parameter_type, 0.1, 1.)
-    d = StationaryDiscretization(op, rhs, products={'h1_0_semi': h1_product},
-                                 parameter_space=parameter_space,
-                                 visualizer=visualizer)
+    d = InstationaryDiscretization(1., initial_data=initial_data, operator=op, rhs=rhs, mass=l2_0_product,
+                                   time_stepper=time_stepper,
+                                   products={'l2': l2_product, 'l2_0': l2_0_product,
+                                             'h1': h1_product, 'h1_0_semi': h1_0_product},
+                                   parameter_space=parameter_space, visualizer=visualizer)
 
     return d
 
@@ -191,7 +185,7 @@ def reduce_adaptive_greedy(d, reductor, validation_mus, basis_size):
     extension_algorithm = pod_basis_extension
     pool = new_parallel_pool()
 
-    greedy_data = adaptive_greedy(d, reductor, validation_mus=-validation_mus,
+    greedy_data = adaptive_greedy(d, reductor, validation_mus=validation_mus,
                                   extension_algorithm=extension_algorithm, max_extensions=basis_size,
                                   pool=pool)
 
@@ -241,64 +235,79 @@ def main():
 
     # select reduction algorithm with error estimator
     #################################################
-
+    coercivity_estimator = ExpressionParameterFunctional('min(diffusion)', d.parameter_type)
     reductors = {'l2_estimate': reduce_parabolic_l2_estimate,
                  'l2_estimate_simple': reduce_parabolic_l2_estimate_simple,
-                 'energy_estimate': reduce_parabolic_energy_estimate,
-                 'energy_estimate_simple': reduce_parabolic_energy_estimate_simple}
-    if REDUCTOR == 'l2_estimate' or REDUCTOR == 'l2_estimate_simple':
-        reductor = reductors[REDUCTOR]
-    elif REDUCTOR == 'energy_estimate' or REDUCTOR == 'energy_estimate_simple':
-        coercivity_estimator = ExpressionParameterFunctional('min(diffusion)', d.parameter_type)
-        reductor = partial(reductors[REDUCTOR], error_product=d.h1_0_semi_product,
-                           coercivity_estimator=coercivity_estimator, gamma=GAMMA)
+                 'energy_estimate': partial(reduce_parabolic_energy_estimate, error_product=d.h1_0_semi_product,
+                                            coercivity_estimator=coercivity_estimator, gamma=GAMMA),
+                 'energy_estimate_simple': partial(reduce_parabolic_energy_estimate_simple,
+                                                   error_product=d.h1_0_semi_product,
+                                                   coercivity_estimator=coercivity_estimator, gamma=GAMMA)}
+    if REDUCTOR in ('l2_estimate', 'l2_estimate_simple', 'energy_estimate', 'energy_estimate_simple'):
+        reductors = {REDUCTOR: reductors[REDUCTOR]}
+    elif REDUCTOR == 'all':
+        reductors = reductors
     else:
         raise NotImplementedError
 
-
-    # generate reduced model
-    ########################
-    if ALG == 'naive':
-        rd, rc = reduce_naive(d, reductor, RBSIZE)
-    elif ALG == 'greedy':
-        rd, rc = reduce_greedy(d, reductor, SNAPSHOTS, RBSIZE)
-    elif ALG == 'adaptive_greedy':
-        rd, rc = reduce_adaptive_greedy(d, reductor, SNAPSHOTS, RBSIZE)
-    elif ALG == 'pod':
-        rd, rc = reduce_pod(d, reductor, SNAPSHOTS, RBSIZE)
-    else:
-        raise NotImplementedError
-
-
-    # evaluate the reduction error
-    ##############################
-    results = reduction_error_analysis(rd, discretization=d, reconstructor=rc, estimator=True,
-                                       error_norms=[lambda U: np.max(d.l2_norm(U))], error_norm_names=['L2'],
-                                       condition=False, test_mus=TEST, random_seed=999, plot=True)
+    results = {}
+    for reductor_name, reductor in reductors.iteritems():
+        # generate reduced model
+        ########################
+        if ALG == 'naive':
+            rd, rc = reduce_naive(d, reductor, RBSIZE)
+        elif ALG == 'greedy':
+            rd, rc = reduce_greedy(d, reductor, SNAPSHOTS, RBSIZE)
+        elif ALG == 'adaptive_greedy':
+            rd, rc = reduce_adaptive_greedy(d, reductor, SNAPSHOTS, RBSIZE)
+        elif ALG == 'pod':
+            rd, rc = reduce_pod(d, reductor, SNAPSHOTS, RBSIZE)
+        else:
+            raise NotImplementedError
 
 
-    # show results
-    ##############
-    print(results['summary'])
-    import matplotlib.pyplot
-    matplotlib.pyplot.show(results['figure'])
+        # evaluate the reduction error
+        ##############################
+        results[reductor_name] = reduction_error_analysis(rd, discretization=d, reconstructor=rc, estimator=True,
+                                           error_norms=[lambda U: np.max(d.l2_norm(U))], error_norm_names=['error'],
+                                           condition=False, test_mus=TEST, random_seed=999, plot=True)
 
 
-    # write results to disk
-    #######################
-    from pymor.core.pickle import dump
-    dump(rd, open('reduced_model.out', 'wb'))
-    results.pop('figure')  # matplotlib figures cannot be serialized
-    dump(results, open('results.out', 'wb'))
+        # show results
+        ##############
+        print(results[reductor_name]['summary'])
+        import matplotlib.pyplot as plt
+        plt.show(results[reductor_name]['figure'])
 
 
-    # visualize reduction error for worst-approximated mu
-    #####################################################
-    mumax = results['max_error_mus'][0, -1]
-    U = d.solve(mumax)
-    U_RB = rc.reconstruct(rd.solve(mumax))
-    d.visualize((U, U_RB, U - U_RB), legend=('Detailed Solution', 'Reduced Solution', 'Error'),
-                separate_colorbars=True, block=True)
+        # write results to disk
+        #######################
+        from pymor.core.pickle import dump
+        dump(rd, open('reduced_model_'+reductor_name+'.out', 'wb'))
+        results[reductor_name].pop('figure')  # matplotlib figures cannot be serialized
+        dump(results[reductor_name], open('results_'+reductor_name+'.out', 'wb'))
+
+
+        # visualize reduction error for worst-approximated mu
+        #####################################################
+        mumax = results[reductor_name]['max_error_mus'][0, -1]
+        U = d.solve(mumax)
+        U_RB = rc.reconstruct(rd.solve(mumax))
+        d.visualize((U, U_RB, U - U_RB), legend=('Detailed Solution', 'Reduced Solution', 'Error'),
+                    separate_colorbars=True, block=False)
+
+    if len(reductors) > 1:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        legend = []
+        for reductor_name, reductor in reductors.iteritems():
+            ax.semilogy(results[reductor_name]['basis_sizes'], results[reductor_name]['max_errors'][0])
+            legend.append('error: '+reductor_name)
+            ax.semilogy(results[reductor_name]['basis_sizes'], results[reductor_name]['max_estimates'], ls='--')
+            legend.append('estimator: '+reductor_name)
+        ax.legend(legend)
+        ax.set_title('maximum errors')
+        plt.show(fig)
 
 
 if __name__ == '__main__':
